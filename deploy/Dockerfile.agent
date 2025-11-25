@@ -1,0 +1,42 @@
+# Dockerfile for ICMP-Mon Agent
+#
+# Build:
+#   docker build -f deploy/Dockerfile.agent -t icmpmon-agent .
+#
+# Run:
+#   docker run --cap-add NET_RAW \
+#     -e ICMPMON_CONTROL_PLANE_URL=http://control-plane:8080 \
+#     -e ICMPMON_AGENT_NAME=my-agent \
+#     icmpmon-agent
+
+FROM golang:1.23-alpine AS builder
+
+WORKDIR /app
+
+# Install build dependencies
+RUN apk add --no-cache git
+
+# Copy go mod files first for caching
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Copy source
+COPY . .
+
+# Build
+RUN CGO_ENABLED=0 GOOS=linux go build -o /bin/agent ./agent/cmd/agent
+
+# =============================================================================
+# Runtime image
+# =============================================================================
+FROM alpine:3.19
+
+# Install fping and mtr for probing
+RUN apk add --no-cache ca-certificates tzdata fping mtr
+
+COPY --from=builder /bin/agent /bin/agent
+
+# Note: Agent needs to run as root or have CAP_NET_RAW for ICMP
+# In production, you might want to use setcap instead
+
+ENTRYPOINT ["/bin/agent"]

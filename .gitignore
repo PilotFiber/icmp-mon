@@ -1,0 +1,50 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+/agent/cmd/agent
+/control-plane/cmd/control-plane
+
+# Test binary
+*.test
+
+# Output of go coverage
+*.out
+
+# Go workspace
+go.work
+go.work.sum
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local env files
+.env
+.env.local
+.env.*.local
+*.local
+
+# Logs
+*.log
+
+# Build output
+/bin/
+/build/
+
+# Node (ui/)
+ui/node_modules/
+ui/dist/
+ui/dist-ssr/
+
+# Test fixtures that might contain sensitive data
+/test/fixtures/local/

@@ -1,0 +1,148 @@
+# Docker Compose for ICMP-Mon local development
+#
+# Usage:
+#   docker-compose up -d       # Start all services
+#   docker-compose logs -f     # View logs
+#   docker-compose down -v     # Stop and remove volumes
+#
+# Services:
+#   - timescaledb: PostgreSQL with TimescaleDB extension
+#   - control-plane: API server (build from source)
+#   - agent-*: Multiple regional agents (build from source)
+
+services:
+  # ==========================================================================
+  # DATABASE
+  # ==========================================================================
+  timescaledb:
+    image: timescale/timescaledb:latest-pg16
+    container_name: icmpmon-db
+    environment:
+      POSTGRES_USER: icmpmon
+      POSTGRES_PASSWORD: icmpmon
+      POSTGRES_DB: icmpmon
+    ports:
+      - "5432:5432"
+    volumes:
+      - timescaledb_data:/var/lib/postgresql/data
+      - ../db/migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U icmpmon"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ==========================================================================
+  # CONTROL PLANE
+  # ==========================================================================
+  control-plane:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.control-plane
+    container_name: icmpmon-control-plane
+    environment:
+      ICMPMON_DATABASE_URL: postgres://icmpmon:icmpmon@timescaledb:5432/icmpmon?sslmode=disable
+      ICMPMON_DEBUG: "true"
+    ports:
+      - "8081:8080"
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ==========================================================================
+  # AGENTS - Simulating multiple regional vantage points
+  # ==========================================================================
+
+  # NYC Agent - Pilot POP (host network for full MTR visibility)
+  agent-nyc:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.agent
+    container_name: icmpmon-agent-nyc
+    network_mode: host
+    environment:
+      ICMPMON_CONTROL_PLANE_URL: http://localhost:8081
+      ICMPMON_AGENT_NAME: nyc-pop-01
+      ICMPMON_AGENT_REGION: us-east
+      ICMPMON_AGENT_LOCATION: "New York, NY"
+      ICMPMON_AGENT_PROVIDER: pilot
+      ICMPMON_AGENT_TAGS: '{"pilot_pop":"NYC1","network_type":"transit"}'
+    depends_on:
+      - control-plane
+    restart: unless-stopped
+
+  # LAX Agent - Pilot POP
+  agent-lax:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.agent
+    container_name: icmpmon-agent-lax
+    environment:
+      ICMPMON_CONTROL_PLANE_URL: http://control-plane:8080
+      ICMPMON_AGENT_NAME: lax-pop-01
+      ICMPMON_AGENT_REGION: us-west
+      ICMPMON_AGENT_LOCATION: "Los Angeles, CA"
+      ICMPMON_AGENT_PROVIDER: pilot
+      ICMPMON_AGENT_TAGS: '{"pilot_pop":"LAX1","network_type":"transit"}'
+    depends_on:
+      - control-plane
+    restart: unless-stopped
+
+  # Chicago Agent - Pilot POP
+  agent-chi:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.agent
+    container_name: icmpmon-agent-chi
+    environment:
+      ICMPMON_CONTROL_PLANE_URL: http://control-plane:8080
+      ICMPMON_AGENT_NAME: chi-pop-01
+      ICMPMON_AGENT_REGION: us-central
+      ICMPMON_AGENT_LOCATION: "Chicago, IL"
+      ICMPMON_AGENT_PROVIDER: pilot
+      ICMPMON_AGENT_TAGS: '{"pilot_pop":"CHI1","network_type":"transit"}'
+    depends_on:
+      - control-plane
+    restart: unless-stopped
+
+  # AWS us-east-1 Agent - Cloud vantage point
+  agent-aws-east:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.agent
+    container_name: icmpmon-agent-aws-east
+    environment:
+      ICMPMON_CONTROL_PLANE_URL: http://control-plane:8080
+      ICMPMON_AGENT_NAME: aws-use1-01
+      ICMPMON_AGENT_REGION: us-east
+      ICMPMON_AGENT_LOCATION: "AWS us-east-1"
+      ICMPMON_AGENT_PROVIDER: aws
+      ICMPMON_AGENT_TAGS: '{"cloud_region":"us-east-1","network_type":"cloud"}'
+    depends_on:
+      - control-plane
+    restart: unless-stopped
+
+  # DigitalOcean NYC Agent - Cloud vantage point
+  agent-do-nyc:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.agent
+    container_name: icmpmon-agent-do-nyc
+    environment:
+      ICMPMON_CONTROL_PLANE_URL: http://control-plane:8080
+      ICMPMON_AGENT_NAME: do-nyc1-01
+      ICMPMON_AGENT_REGION: us-east
+      ICMPMON_AGENT_LOCATION: "DigitalOcean NYC1"
+      ICMPMON_AGENT_PROVIDER: digitalocean
+      ICMPMON_AGENT_TAGS: '{"cloud_region":"nyc1","network_type":"cloud"}'
+    depends_on:
+      - control-plane
+    restart: unless-stopped
+
+volumes:
+  timescaledb_data:
+
+networks:
+  default:
+    name: icmpmon

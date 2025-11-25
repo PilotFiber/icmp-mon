@@ -1,0 +1,119 @@
+@import "tailwindcss";
+
+/* Pilot Fiber Design System - Custom Theme */
+@theme {
+  /* Brand Colors */
+  --color-pilot-yellow: #FFE200;
+  --color-pilot-navy: #18284F;
+  --color-pilot-cyan: #6EDBE0;
+  --color-pilot-red: #FC534E;
+
+  /* Extended palette */
+  --color-pilot-yellow-light: #FFF066;
+  --color-pilot-navy-light: #2A3D6B;
+  --color-pilot-navy-dark: #0F1A33;
+  --color-pilot-cyan-light: #9AE8EC;
+  --color-pilot-cyan-dark: #4ABFC4;
+
+  /* Semantic colors */
+  --color-success: #22C55E;
+  --color-warning: #F59E0B;
+  --color-error: #EF4444;
+  --color-info: #6EDBE0;
+
+  /* Status colors for monitoring */
+  --color-status-healthy: #22C55E;
+  --color-status-degraded: #F59E0B;
+  --color-status-down: #EF4444;
+  --color-status-unknown: #6B7280;
+
+  /* Fonts */
+  --font-sans: 'Maax', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+
+  /* Custom animations */
+  --animate-fade-in: fade-in 0.2s ease-out;
+  --animate-scale-in: scale-in 0.2s ease-out;
+  --animate-slide-up: slide-up 0.3s ease-out;
+  --animate-pulse-status: pulse-status 2s ease-in-out infinite;
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes scale-in {
+  from { opacity: 0; transform: scale(0.95); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes slide-up {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes pulse-status {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+/* Maax font - Pilot's brand font */
+@font-face {
+  font-family: 'Maax';
+  src: url('https://static.pilotfiber.com/fonts/Maax-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Maax';
+  src: url('https://static.pilotfiber.com/fonts/Maax-Medium.woff2') format('woff2');
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Maax';
+  src: url('https://static.pilotfiber.com/fonts/Maax-Bold.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* Base styles */
+html {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  @apply bg-pilot-navy-dark text-white font-sans;
+  margin: 0;
+  min-height: 100vh;
+}
+
+/* Focus ring utility - Pilot yellow */
+.focus-ring {
+  @apply focus:outline-none focus:ring-2 focus:ring-pilot-yellow focus:ring-offset-2 focus:ring-offset-pilot-navy;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  @apply bg-pilot-navy-dark;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply bg-pilot-navy-light rounded;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  @apply bg-pilot-navy;
+}
