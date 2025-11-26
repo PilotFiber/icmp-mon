@@ -48,3 +48,7 @@ ui/dist-ssr/
 
 # Test fixtures that might contain sensitive data
 /test/fixtures/local/
+
+# Build binaries
+control-plane/control-plane
+control-plane/icmp-control-plane
