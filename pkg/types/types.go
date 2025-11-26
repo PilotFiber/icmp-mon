@@ -29,6 +29,37 @@ type Target struct {
 	Tier         string            `json:"tier"`
 	SubscriberID string            `json:"subscriber_id,omitempty"`
 	Tags         map[string]string `json:"tags,omitempty"`
+	DisplayName  string            `json:"display_name,omitempty"`
+	Notes        string            `json:"notes,omitempty"`
+
+	// Subnet relationship (for Pilot IP pool monitoring)
+	SubnetID *string `json:"subnet_id,omitempty"`
+
+	// Ownership and origin tracking
+	Ownership OwnershipType `json:"ownership"`
+	Origin    OriginType    `json:"origin,omitempty"`
+
+	// IP classification
+	IPType IPType `json:"ip_type,omitempty"`
+
+	// Monitoring state machine
+	MonitoringState   MonitoringState `json:"monitoring_state"`
+	StateChangedAt    time.Time       `json:"state_changed_at"`
+	NeedsReview       bool            `json:"needs_review"`
+	DiscoveryAttempts int             `json:"discovery_attempts"`
+	LastResponseAt    *time.Time      `json:"last_response_at,omitempty"`
+
+	// Baseline tracking for alerting logic
+	// FirstResponseAt is when this target first responded to any probe
+	FirstResponseAt *time.Time `json:"first_response_at,omitempty"`
+	// BaselineEstablishedAt is when this target was confirmed stable (responding for 1+ min)
+	// Only targets with a baseline can transition to DOWN/DEGRADED (alertable)
+	// Targets without a baseline that stop responding go to UNRESPONSIVE (not alertable)
+	BaselineEstablishedAt *time.Time `json:"baseline_established_at,omitempty"`
+
+	// Archive tracking (archived is NOT a monitoring state)
+	ArchivedAt    *time.Time `json:"archived_at,omitempty"`
+	ArchiveReason string     `json:"archive_reason,omitempty"`
 
 	// ExpectedOutcome defines alerting behavior.
 	// For traditional monitoring: ShouldSucceed=true (alert on failure)
@@ -38,6 +69,60 @@ type Target struct {
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
+
+// MonitoringState represents the lifecycle state of a target.
+type MonitoringState string
+
+const (
+	// StateUnknown - Newly assigned IP, never probed
+	StateUnknown MonitoringState = "unknown"
+	// StateActive - Responds to ICMP normally, full monitoring
+	StateActive MonitoringState = "active"
+	// StateDegraded - Responding but with packet loss or latency issues (alertable)
+	StateDegraded MonitoringState = "degraded"
+	// StateDown - Had baseline, now completely unresponsive (alertable)
+	StateDown MonitoringState = "down"
+	// StateUnresponsive - Never established baseline (not alertable)
+	StateUnresponsive MonitoringState = "unresponsive"
+	// StateExcluded - Down for 24h+, auto-stopped monitoring (needs review)
+	StateExcluded MonitoringState = "excluded"
+	// StateInactive - User-disabled monitoring
+	StateInactive MonitoringState = "inactive"
+)
+
+// IPType classifies the type of IP address.
+type IPType string
+
+const (
+	// IPTypeGateway - Pilot-owned gateways (deprioritize ICMP)
+	IPTypeGateway IPType = "gateway"
+	// IPTypeInfrastructure - Pilot servers and network devices
+	IPTypeInfrastructure IPType = "infrastructure"
+	// IPTypeCustomer - Customer-facing addresses
+	IPTypeCustomer IPType = "customer"
+)
+
+// OwnershipType defines who owns/manages the target.
+type OwnershipType string
+
+const (
+	// OwnershipAuto - Follows subnet lifecycle, can be auto-archived
+	OwnershipAuto OwnershipType = "auto"
+	// OwnershipManual - User explicitly wants this, never auto-archived
+	OwnershipManual OwnershipType = "manual"
+)
+
+// OriginType tracks how the target was created.
+type OriginType string
+
+const (
+	// OriginSync - Created during Pilot API sync
+	OriginSync OriginType = "sync"
+	// OriginDiscovery - Found during probe sweep
+	OriginDiscovery OriginType = "discovery"
+	// OriginUser - Manually created by user
+	OriginUser OriginType = "user"
+)
 
 // Validate checks that the target has required fields and valid values.
 func (t *Target) Validate() error {
@@ -68,6 +153,112 @@ type ExpectedOutcome struct {
 
 	// AlertMessage is a custom message for the alert.
 	AlertMessage string `json:"alert_message,omitempty"`
+}
+
+// =============================================================================
+// SUBNET
+// =============================================================================
+
+// Subnet represents a network block from the Pilot API.
+// Subnets own targets and provide enriched metadata.
+type Subnet struct {
+	ID string `json:"id"`
+
+	// Pilot API fields
+	PilotSubnetID      *int    `json:"pilot_subnet_id,omitempty"`
+	NetworkAddress     string  `json:"network_address"`      // CIDR notation, e.g., "192.168.1.0/24"
+	NetworkSize        int     `json:"network_size"`         // Prefix length, e.g., 24
+	GatewayAddress     *string `json:"gateway_address,omitempty"`
+	FirstUsableAddress *string `json:"first_usable_address,omitempty"`
+	LastUsableAddress  *string `json:"last_usable_address,omitempty"`
+
+	// Enriched metadata (from Pilot relationships)
+	VLANID         *int    `json:"vlan_id,omitempty"`
+	ServiceID      *int    `json:"service_id,omitempty"`
+	SubscriberID   *int    `json:"subscriber_id,omitempty"`
+	SubscriberName *string `json:"subscriber_name,omitempty"`
+
+	// Location metadata
+	LocationID      *int    `json:"location_id,omitempty"`
+	LocationAddress *string `json:"location_address,omitempty"`
+	City            *string `json:"city,omitempty"`
+	Region          *string `json:"region,omitempty"`
+	POPName         *string `json:"pop_name,omitempty"`
+
+	// Network topology
+	GatewayDevice *string `json:"gateway_device,omitempty"` // CSW or other gateway device
+
+	// Lifecycle
+	State         string     `json:"state"` // "active" | "archived"
+	ArchivedAt    *time.Time `json:"archived_at,omitempty"`
+	ArchiveReason *string    `json:"archive_reason,omitempty"`
+
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// Validate checks that the subnet has required fields.
+func (s *Subnet) Validate() error {
+	if s.NetworkAddress == "" {
+		return fmt.Errorf("network_address is required")
+	}
+	_, _, err := net.ParseCIDR(s.NetworkAddress)
+	if err != nil {
+		return fmt.Errorf("invalid network_address CIDR: %s", s.NetworkAddress)
+	}
+	if s.NetworkSize <= 0 || s.NetworkSize > 32 {
+		return fmt.Errorf("network_size must be between 1 and 32")
+	}
+	return nil
+}
+
+// TargetStateTransition records a state change for audit purposes.
+type TargetStateTransition struct {
+	ID          int64           `json:"id"`
+	TargetID    string          `json:"target_id"`
+	FromState   MonitoringState `json:"from_state,omitempty"`
+	ToState     MonitoringState `json:"to_state"`
+	Reason      string          `json:"reason,omitempty"`
+	TriggeredBy string          `json:"triggered_by"`
+	CreatedAt   time.Time       `json:"created_at"`
+}
+
+// ActivityLogEntry represents an audit event.
+type ActivityLogEntry struct {
+	ID        int64  `json:"id"`
+	TargetID  string `json:"target_id,omitempty"`
+	SubnetID  string `json:"subnet_id,omitempty"`
+	AgentID   string `json:"agent_id,omitempty"`
+	IP        string `json:"ip,omitempty"` // Denormalized for deleted target queries
+
+	Category    string                 `json:"category"`   // target, subnet, agent, sync, user, system
+	EventType   string                 `json:"event_type"` // state_change, discovered, created, etc.
+	Details     map[string]interface{} `json:"details,omitempty"`
+	TriggeredBy string                 `json:"triggered_by"`
+	Severity    string                 `json:"severity"` // debug, info, warning, error
+
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// TargetEnriched is a target with denormalized subnet metadata.
+// Used for API responses to avoid N+1 queries.
+type TargetEnriched struct {
+	Target
+
+	// Subnet metadata (denormalized)
+	NetworkAddress     *string `json:"network_address,omitempty"`
+	NetworkSize        *int    `json:"network_size,omitempty"`
+	PilotSubnetID      *int    `json:"pilot_subnet_id,omitempty"`
+	ServiceID          *int    `json:"service_id,omitempty"`
+	SubnetSubscriberID *int    `json:"subnet_subscriber_id,omitempty"`
+	SubscriberName     *string `json:"subscriber_name,omitempty"`
+	LocationID         *int    `json:"location_id,omitempty"`
+	LocationAddress    *string `json:"location_address,omitempty"`
+	City               *string `json:"city,omitempty"`
+	Region             *string `json:"region,omitempty"`
+	POPName            *string `json:"pop_name,omitempty"`
+	GatewayDevice      *string `json:"gateway_device,omitempty"`
+	GatewayAddress     *string `json:"gateway_address,omitempty"`
 }
 
 // =============================================================================
@@ -239,6 +430,47 @@ type AssignmentChange struct {
 	Assignment *Assignment `json:"assignment,omitempty"`
 	TargetID   string      `json:"target_id,omitempty"` // For "remove" action
 }
+
+// =============================================================================
+// PERSISTED ASSIGNMENTS (Database records)
+// =============================================================================
+
+// TargetAssignment represents a persisted assignment in the database.
+// This is the database record, not the full assignment sent to agents.
+type TargetAssignment struct {
+	ID         string    `json:"id"`
+	TargetID   string    `json:"target_id"`
+	AgentID    string    `json:"agent_id"`
+	Tier       string    `json:"tier"`
+	AssignedAt time.Time `json:"assigned_at"`
+	AssignedBy string    `json:"assigned_by"` // "initial", "rebalancer", "failover", "manual"
+}
+
+// AssignmentHistory records assignment changes for audit purposes.
+type AssignmentHistory struct {
+	ID         int64     `json:"id"`
+	TargetID   string    `json:"target_id"`
+	AgentID    string    `json:"agent_id"`
+	Action     string    `json:"action"` // "assigned", "unassigned", "reassigned"
+	Reason     string    `json:"reason,omitempty"`
+	OldAgentID string    `json:"old_agent_id,omitempty"` // For reassignments
+	CreatedAt  time.Time `json:"created_at"`
+}
+
+// AssignmentHistoryAction constants
+const (
+	AssignmentActionAssigned   = "assigned"
+	AssignmentActionUnassigned = "unassigned"
+	AssignmentActionReassigned = "reassigned"
+)
+
+// AssignedBy constants
+const (
+	AssignedByInitial    = "initial"
+	AssignedByRebalancer = "rebalancer"
+	AssignedByFailover   = "failover"
+	AssignedByManual     = "manual"
+)
 
 // =============================================================================
 // PROBE RESULT
@@ -496,4 +728,34 @@ type HeartbeatResponse struct {
 
 	// Pending commands to execute
 	Commands []Command `json:"commands,omitempty"`
+
+	// Update available
+	UpdateAvailable *UpdateInfo `json:"update_available,omitempty"`
+}
+
+// UpdateInfo contains information about an available agent update.
+type UpdateInfo struct {
+	// Version is the new version string (e.g., "1.2.3")
+	Version string `json:"version"`
+
+	// ReleaseID is the database ID of the release
+	ReleaseID string `json:"release_id"`
+
+	// DownloadURL is the URL to download the new binary
+	DownloadURL string `json:"download_url"`
+
+	// Checksum is the SHA256 checksum of the binary
+	Checksum string `json:"checksum"`
+
+	// Size is the binary size in bytes
+	Size int64 `json:"size"`
+
+	// ReleaseNotes contains upgrade notes
+	ReleaseNotes string `json:"release_notes,omitempty"`
+
+	// Mandatory indicates whether this update is required
+	Mandatory bool `json:"mandatory"`
+
+	// RolloutID is the rollout campaign this update is part of
+	RolloutID string `json:"rollout_id,omitempty"`
 }

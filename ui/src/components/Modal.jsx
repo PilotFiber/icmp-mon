@@ -37,14 +37,14 @@ export function Modal({ isOpen, onClose, title, children, size = 'md' }) {
 
         {/* Modal */}
         <div
-          className={`relative w-full ${sizeClasses[size]} bg-pilot-navy border border-pilot-navy-light rounded-xl shadow-2xl`}
+          className={`relative w-full ${sizeClasses[size]} bg-surface-secondary border border-theme rounded-xl shadow-2xl`}
         >
           {/* Header */}
-          <div className="flex items-center justify-between px-6 py-4 border-b border-pilot-navy-light">
-            <h2 className="text-lg font-semibold text-white">{title}</h2>
+          <div className="flex items-center justify-between px-6 py-4 border-b border-theme">
+            <h2 className="text-lg font-semibold text-theme-primary">{title}</h2>
             <button
               onClick={onClose}
-              className="text-gray-400 hover:text-white transition-colors"
+              className="text-theme-muted hover:text-theme-primary transition-colors"
             >
               <X className="w-5 h-5" />
             </button>
@@ -60,7 +60,7 @@ export function Modal({ isOpen, onClose, title, children, size = 'md' }) {
 
 export function ModalFooter({ children }) {
   return (
-    <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-pilot-navy-light">
+    <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-theme">
       {children}
     </div>
   );
@@ -69,7 +69,7 @@ export function ModalFooter({ children }) {
 export function ConfirmModal({ isOpen, onClose, onConfirm, title, message, confirmText = 'Confirm', confirmVariant = 'danger', loading = false }) {
   return (
     <Modal isOpen={isOpen} onClose={onClose} title={title} size="sm">
-      <p className="text-gray-300">{message}</p>
+      <p className="text-theme-secondary">{message}</p>
       <ModalFooter>
         <Button variant="ghost" onClick={onClose} disabled={loading}>
           Cancel

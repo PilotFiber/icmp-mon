@@ -29,6 +29,13 @@ const statusConfig = {
     dot: 'bg-pilot-cyan',
     label: 'Pending',
   },
+  // Gray/muted status for targets that never responded (not alertable)
+  inactive: {
+    bg: 'bg-theme-muted/20',
+    text: 'text-theme-muted',
+    dot: 'bg-theme-muted',
+    label: 'Inactive',
+  },
 };
 
 export function StatusBadge({

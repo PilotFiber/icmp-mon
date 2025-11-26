@@ -138,83 +138,83 @@ function TierModal({ isOpen, onClose, tier, onSave }) {
 
         <div className="grid grid-cols-2 gap-4">
           <div>
-            <label className="block text-sm font-medium text-gray-300 mb-1">Name (ID)</label>
+            <label className="block text-sm font-medium text-theme-secondary mb-1">Name (ID)</label>
             <input
               type="text"
               value={formData.name}
               onChange={(e) => setFormData(prev => ({ ...prev, name: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '-') }))}
               placeholder="e.g., enterprise"
               disabled={isEditing}
-              className="w-full px-3 py-2 bg-pilot-navy-dark border border-pilot-navy-light rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-pilot-cyan disabled:opacity-50"
+              className="w-full px-3 py-2 bg-surface-primary border border-theme rounded-lg text-theme-primary placeholder-theme-muted focus:outline-none focus:ring-2 focus:ring-pilot-cyan disabled:opacity-50"
             />
-            {isEditing && <p className="text-xs text-gray-500 mt-1">Name cannot be changed</p>}
+            {isEditing && <p className="text-xs text-theme-muted mt-1">Name cannot be changed</p>}
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-300 mb-1">Display Name</label>
+            <label className="block text-sm font-medium text-theme-secondary mb-1">Display Name</label>
             <input
               type="text"
               value={formData.display_name}
               onChange={(e) => setFormData(prev => ({ ...prev, display_name: e.target.value }))}
               placeholder="e.g., Enterprise Customers"
-              className="w-full px-3 py-2 bg-pilot-navy-dark border border-pilot-navy-light rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-pilot-cyan"
+              className="w-full px-3 py-2 bg-surface-primary border border-theme rounded-lg text-theme-primary placeholder-theme-muted focus:outline-none focus:ring-2 focus:ring-pilot-cyan"
             />
           </div>
         </div>
 
-        <div className="border-t border-pilot-navy-light pt-4">
-          <h4 className="text-sm font-medium text-gray-300 mb-3 flex items-center gap-2">
+        <div className="border-t border-theme pt-4">
+          <h4 className="text-sm font-medium text-theme-secondary mb-3 flex items-center gap-2">
             <Clock className="w-4 h-4" />
             Probe Timing
           </h4>
           <div className="grid grid-cols-3 gap-4">
             <div>
-              <label className="block text-sm text-gray-400 mb-1">Interval (seconds)</label>
+              <label className="block text-sm text-theme-muted mb-1">Interval (seconds)</label>
               <input
                 type="number"
                 min="1"
                 value={formData.probe_interval_seconds}
                 onChange={(e) => setFormData(prev => ({ ...prev, probe_interval_seconds: parseInt(e.target.value) || 30 }))}
-                className="w-full px-3 py-2 bg-pilot-navy-dark border border-pilot-navy-light rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-pilot-cyan"
+                className="w-full px-3 py-2 bg-surface-primary border border-theme rounded-lg text-theme-primary focus:outline-none focus:ring-2 focus:ring-pilot-cyan"
               />
             </div>
             <div>
-              <label className="block text-sm text-gray-400 mb-1">Timeout (seconds)</label>
+              <label className="block text-sm text-theme-muted mb-1">Timeout (seconds)</label>
               <input
                 type="number"
                 min="1"
                 value={formData.probe_timeout_seconds}
                 onChange={(e) => setFormData(prev => ({ ...prev, probe_timeout_seconds: parseInt(e.target.value) || 5 }))}
-                className="w-full px-3 py-2 bg-pilot-navy-dark border border-pilot-navy-light rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-pilot-cyan"
+                className="w-full px-3 py-2 bg-surface-primary border border-theme rounded-lg text-theme-primary focus:outline-none focus:ring-2 focus:ring-pilot-cyan"
               />
             </div>
             <div>
-              <label className="block text-sm text-gray-400 mb-1">Retries</label>
+              <label className="block text-sm text-theme-muted mb-1">Retries</label>
               <input
                 type="number"
                 min="0"
                 value={formData.probe_retries}
                 onChange={(e) => setFormData(prev => ({ ...prev, probe_retries: parseInt(e.target.value) || 0 }))}
-                className="w-full px-3 py-2 bg-pilot-navy-dark border border-pilot-navy-light rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-pilot-cyan"
+                className="w-full px-3 py-2 bg-surface-primary border border-theme rounded-lg text-theme-primary focus:outline-none focus:ring-2 focus:ring-pilot-cyan"
               />
             </div>
           </div>
         </div>
 
-        <div className="border-t border-pilot-navy-light pt-4">
-          <h4 className="text-sm font-medium text-gray-300 mb-3 flex items-center gap-2">
+        <div className="border-t border-theme pt-4">
+          <h4 className="text-sm font-medium text-theme-secondary mb-3 flex items-center gap-2">
             <Users className="w-4 h-4" />
             Agent Selection
           </h4>
           <div className="space-y-3">
             <div>
-              <label className="block text-sm text-gray-400 mb-1">Strategy</label>
+              <label className="block text-sm text-theme-muted mb-1">Strategy</label>
               <select
                 value={formData.agent_selection.strategy}
                 onChange={(e) => setFormData(prev => ({
                   ...prev,
                   agent_selection: { ...prev.agent_selection, strategy: e.target.value }
                 }))}
-                className="w-full px-3 py-2 bg-pilot-navy-dark border border-pilot-navy-light rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-pilot-cyan"
+                className="w-full px-3 py-2 bg-surface-primary border border-theme rounded-lg text-theme-primary focus:outline-none focus:ring-2 focus:ring-pilot-cyan"
               >
                 <option value="all">All Agents</option>
                 <option value="distributed">Distributed (subset)</option>
@@ -222,9 +222,9 @@ function TierModal({ isOpen, onClose, tier, onSave }) {
             </div>
 
             {formData.agent_selection.strategy === 'distributed' && (
-              <div className="grid grid-cols-3 gap-4 pl-4 border-l-2 border-pilot-navy-light">
+              <div className="grid grid-cols-3 gap-4 pl-4 border-l-2 border-theme">
                 <div>
-                  <label className="block text-sm text-gray-400 mb-1">Agent Count</label>
+                  <label className="block text-sm text-theme-muted mb-1">Agent Count</label>
                   <input
                     type="number"
                     min="1"
@@ -233,11 +233,11 @@ function TierModal({ isOpen, onClose, tier, onSave }) {
                       ...prev,
                       agent_selection: { ...prev.agent_selection, count: parseInt(e.target.value) || 1 }
                     }))}
-                    className="w-full px-3 py-2 bg-pilot-navy-dark border border-pilot-navy-light rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-pilot-cyan"
+                    className="w-full px-3 py-2 bg-surface-primary border border-theme rounded-lg text-theme-primary focus:outline-none focus:ring-2 focus:ring-pilot-cyan"
                   />
                 </div>
                 <div>
-                  <label className="block text-sm text-gray-400 mb-1">Min Regions</label>
+                  <label className="block text-sm text-theme-muted mb-1">Min Regions</label>
                   <input
                     type="number"
                     min="0"
@@ -249,11 +249,11 @@ function TierModal({ isOpen, onClose, tier, onSave }) {
                         diversity: { ...prev.agent_selection.diversity, min_regions: parseInt(e.target.value) || 0 }
                       }
                     }))}
-                    className="w-full px-3 py-2 bg-pilot-navy-dark border border-pilot-navy-light rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-pilot-cyan"
+                    className="w-full px-3 py-2 bg-surface-primary border border-theme rounded-lg text-theme-primary focus:outline-none focus:ring-2 focus:ring-pilot-cyan"
                   />
                 </div>
                 <div>
-                  <label className="block text-sm text-gray-400 mb-1">Min Providers</label>
+                  <label className="block text-sm text-theme-muted mb-1">Min Providers</label>
                   <input
                     type="number"
                     min="0"
@@ -265,7 +265,7 @@ function TierModal({ isOpen, onClose, tier, onSave }) {
                         diversity: { ...prev.agent_selection.diversity, min_providers: parseInt(e.target.value) || 0 }
                       }
                     }))}
-                    className="w-full px-3 py-2 bg-pilot-navy-dark border border-pilot-navy-light rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-pilot-cyan"
+                    className="w-full px-3 py-2 bg-surface-primary border border-theme rounded-lg text-theme-primary focus:outline-none focus:ring-2 focus:ring-pilot-cyan"
                   />
                 </div>
               </div>
@@ -353,8 +353,8 @@ export function Settings() {
                       w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left
                       transition-colors
                       ${activeSection === section.id
-                        ? 'bg-pilot-yellow text-pilot-navy'
-                        : 'text-gray-300 hover:bg-pilot-navy-light'
+                        ? 'bg-pilot-yellow text-neutral-900'
+                        : 'text-theme-secondary hover:bg-surface-tertiary'
                       }
                     `}
                   >
@@ -388,11 +388,11 @@ export function Settings() {
 
                 {loading ? (
                   <Card>
-                    <div className="text-center py-8 text-gray-400">Loading tiers...</div>
+                    <div className="text-center py-8 text-theme-muted">Loading tiers...</div>
                   </Card>
                 ) : tiers.length === 0 ? (
                   <Card>
-                    <div className="text-center py-8 text-gray-400">
+                    <div className="text-center py-8 text-theme-muted">
                       No tiers configured. Create your first tier to get started.
                     </div>
                   </Card>
@@ -402,38 +402,38 @@ export function Settings() {
                       <div className="flex items-start justify-between">
                         <div className="flex-1">
                           <div className="flex items-center gap-3">
-                            <h3 className="text-lg font-semibold text-white">{tier.display_name || tier.name}</h3>
-                            <span className="text-xs px-2 py-0.5 bg-pilot-navy-light text-gray-400 rounded font-mono">
+                            <h3 className="text-lg font-semibold text-theme-primary">{tier.display_name || tier.name}</h3>
+                            <span className="text-xs px-2 py-0.5 bg-surface-tertiary text-theme-muted rounded font-mono">
                               {tier.name}
                             </span>
                           </div>
                           <div className="flex gap-6 mt-3 text-sm">
-                            <div className="text-gray-400">
-                              <span className="text-gray-500">Interval:</span>{' '}
-                              <span className="text-white font-medium">{formatDuration(tier.probe_interval)}</span>
+                            <div className="text-theme-muted">
+                              <span className="text-theme-muted">Interval:</span>{' '}
+                              <span className="text-theme-primary font-medium">{formatDuration(tier.probe_interval)}</span>
                             </div>
-                            <div className="text-gray-400">
-                              <span className="text-gray-500">Timeout:</span>{' '}
-                              <span className="text-white font-medium">{formatDuration(tier.probe_timeout)}</span>
+                            <div className="text-theme-muted">
+                              <span className="text-theme-muted">Timeout:</span>{' '}
+                              <span className="text-theme-primary font-medium">{formatDuration(tier.probe_timeout)}</span>
                             </div>
-                            <div className="text-gray-400">
-                              <span className="text-gray-500">Retries:</span>{' '}
-                              <span className="text-white font-medium">{tier.probe_retries}</span>
+                            <div className="text-theme-muted">
+                              <span className="text-theme-muted">Retries:</span>{' '}
+                              <span className="text-theme-primary font-medium">{tier.probe_retries}</span>
                             </div>
                           </div>
-                          <div className="mt-2 text-sm text-gray-400">
-                            <span className="text-gray-500">Agent Selection:</span>{' '}
-                            <span className="text-white capitalize">{tier.agent_selection?.strategy || 'all'}</span>
+                          <div className="mt-2 text-sm text-theme-muted">
+                            <span className="text-theme-muted">Agent Selection:</span>{' '}
+                            <span className="text-theme-primary capitalize">{tier.agent_selection?.strategy || 'all'}</span>
                             {tier.agent_selection?.count > 0 && (
-                              <span className="text-white"> ({tier.agent_selection.count} agents)</span>
+                              <span className="text-theme-primary"> ({tier.agent_selection.count} agents)</span>
                             )}
                             {tier.agent_selection?.diversity?.min_regions > 0 && (
-                              <span className="text-gray-500">
+                              <span className="text-theme-muted">
                                 {' '}• Min {tier.agent_selection.diversity.min_regions} regions
                               </span>
                             )}
                             {tier.agent_selection?.diversity?.min_providers > 0 && (
-                              <span className="text-gray-500">
+                              <span className="text-theme-muted">
                                 , {tier.agent_selection.diversity.min_providers} providers
                               </span>
                             )}
@@ -476,7 +476,7 @@ export function Settings() {
                 </Card>
 
                 <Card>
-                  <h3 className="text-lg font-semibold text-white mb-4">Default Thresholds</h3>
+                  <h3 className="text-lg font-semibold text-theme-primary mb-4">Default Thresholds</h3>
                   <div className="grid grid-cols-2 gap-4">
                     <Input
                       label="Latency Warning (ms)"
@@ -502,19 +502,19 @@ export function Settings() {
                 </Card>
 
                 <Card>
-                  <h3 className="text-lg font-semibold text-white mb-4">Notification Handlers</h3>
+                  <h3 className="text-lg font-semibold text-theme-primary mb-4">Notification Handlers</h3>
                   <div className="space-y-3">
-                    <div className="flex items-center justify-between p-3 bg-pilot-navy-dark rounded-lg">
+                    <div className="flex items-center justify-between p-3 bg-surface-primary rounded-lg">
                       <div>
-                        <span className="font-medium text-white">Slack</span>
-                        <span className="text-sm text-gray-500 ml-2">#noc-alerts</span>
+                        <span className="font-medium text-theme-primary">Slack</span>
+                        <span className="text-sm text-theme-muted ml-2">#noc-alerts</span>
                       </div>
                       <span className="text-xs px-2 py-1 bg-status-healthy/20 text-status-healthy rounded">Active</span>
                     </div>
-                    <div className="flex items-center justify-between p-3 bg-pilot-navy-dark rounded-lg">
+                    <div className="flex items-center justify-between p-3 bg-surface-primary rounded-lg">
                       <div>
-                        <span className="font-medium text-white">PagerDuty</span>
-                        <span className="text-sm text-gray-500 ml-2">Critical alerts only</span>
+                        <span className="font-medium text-theme-primary">PagerDuty</span>
+                        <span className="text-sm text-theme-muted ml-2">Critical alerts only</span>
                       </div>
                       <span className="text-xs px-2 py-1 bg-status-healthy/20 text-status-healthy rounded">Active</span>
                     </div>
@@ -536,12 +536,12 @@ export function Settings() {
                 </Card>
 
                 <Card>
-                  <h3 className="text-lg font-semibold text-white mb-4">Retention Policies</h3>
+                  <h3 className="text-lg font-semibold text-theme-primary mb-4">Retention Policies</h3>
                   <div className="space-y-4">
                     <div className="flex items-center justify-between">
                       <div>
-                        <span className="font-medium text-white">Raw Probe Results</span>
-                        <p className="text-sm text-gray-500">Individual probe measurements</p>
+                        <span className="font-medium text-theme-primary">Raw Probe Results</span>
+                        <p className="text-sm text-theme-muted">Individual probe measurements</p>
                       </div>
                       <Select
                         options={[
@@ -557,8 +557,8 @@ export function Settings() {
                     </div>
                     <div className="flex items-center justify-between">
                       <div>
-                        <span className="font-medium text-white">Hourly Aggregates</span>
-                        <p className="text-sm text-gray-500">Rolled up metrics per hour</p>
+                        <span className="font-medium text-theme-primary">Hourly Aggregates</span>
+                        <p className="text-sm text-theme-muted">Rolled up metrics per hour</p>
                       </div>
                       <Select
                         options={[
@@ -586,19 +586,19 @@ export function Settings() {
                 </Card>
 
                 <Card>
-                  <h3 className="text-lg font-semibold text-white mb-4">API Keys</h3>
+                  <h3 className="text-lg font-semibold text-theme-primary mb-4">API Keys</h3>
                   <div className="space-y-3">
-                    <div className="flex items-center justify-between p-3 bg-pilot-navy-dark rounded-lg">
+                    <div className="flex items-center justify-between p-3 bg-surface-primary rounded-lg">
                       <div>
-                        <span className="font-medium text-white">Production Agents</span>
-                        <p className="text-xs text-gray-500 mt-0.5">Last used: 2 minutes ago</p>
+                        <span className="font-medium text-theme-primary">Production Agents</span>
+                        <p className="text-xs text-theme-muted mt-0.5">Last used: 2 minutes ago</p>
                       </div>
                       <Button variant="ghost" size="sm">Rotate</Button>
                     </div>
-                    <div className="flex items-center justify-between p-3 bg-pilot-navy-dark rounded-lg">
+                    <div className="flex items-center justify-between p-3 bg-surface-primary rounded-lg">
                       <div>
-                        <span className="font-medium text-white">Grafana Integration</span>
-                        <p className="text-xs text-gray-500 mt-0.5">Last used: 1 hour ago</p>
+                        <span className="font-medium text-theme-primary">Grafana Integration</span>
+                        <p className="text-xs text-theme-muted mt-0.5">Last used: 1 hour ago</p>
                       </div>
                       <Button variant="ghost" size="sm">Rotate</Button>
                     </div>

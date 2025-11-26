@@ -1,11 +1,11 @@
 import { forwardRef } from 'react';
 
 const variants = {
-  primary: 'bg-pilot-yellow text-pilot-navy hover:bg-pilot-yellow-light',
-  secondary: 'bg-pilot-navy-light text-white hover:bg-pilot-navy border border-pilot-navy',
+  primary: 'bg-pilot-yellow text-neutral-900 hover:bg-pilot-yellow-light',
+  secondary: 'bg-surface-tertiary text-theme-primary hover:bg-surface-elevated border border-theme',
   danger: 'bg-pilot-red text-white hover:bg-red-600',
-  ghost: 'bg-transparent text-white hover:bg-pilot-navy-light',
-  outline: 'bg-transparent text-pilot-yellow border border-pilot-yellow hover:bg-pilot-yellow hover:text-pilot-navy',
+  ghost: 'bg-transparent text-theme-primary hover:bg-surface-tertiary',
+  outline: 'bg-transparent text-pilot-cyan border border-pilot-cyan hover:bg-pilot-cyan hover:text-neutral-900',
 };
 
 const sizes = {
@@ -31,7 +31,7 @@ export const Button = forwardRef(({
         inline-flex items-center justify-center gap-2
         font-medium rounded-lg
         transition-all duration-200
-        focus:outline-none focus:ring-2 focus:ring-pilot-yellow focus:ring-offset-2 focus:ring-offset-pilot-navy-dark
+        focus:outline-none focus:ring-2 focus:ring-pilot-cyan focus:ring-offset-2 focus:ring-offset-surface-primary
         disabled:opacity-50 disabled:cursor-not-allowed
         ${variants[variant]}
         ${sizes[size]}

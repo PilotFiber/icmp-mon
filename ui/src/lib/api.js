@@ -118,6 +118,7 @@ export const endpoints = {
 
   // Metrics
   getLatencyTrend: (window = '24h') => api.get(`/metrics/latency?window=${window}`),
+  queryMetrics: (query) => api.post('/metrics/query', query),
 
   // Stats
   getFleetStats: () => api.get('/stats/fleet'),
@@ -145,4 +146,69 @@ export const endpoints = {
   // Reports
   getTargetReport: (targetId, window = '90d') =>
     api.get(`/reports/targets/${targetId}?window=${window}`),
+
+  // Enrollment
+  listEnrollments: () => api.get('/enrollments'),
+  getEnrollment: (id) => api.get(`/enrollments/${id}`),
+  retryEnrollment: (id, password) => api.post(`/enrollments/${id}/retry`, { password }),
+  cancelEnrollment: (id) => api.post(`/enrollments/${id}/cancel`),
+  rollbackEnrollment: (id, password) => api.post(`/enrollments/${id}/rollback`, { password }),
+  getEnrollmentLogs: (id) => api.get(`/enrollments/${id}/logs`),
+
+  // SSE enrollment - returns EventSource for streaming
+  enrollAgent: (data) => {
+    return fetch(`${API_BASE}/enrollments`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'text/event-stream',
+      },
+      body: JSON.stringify(data),
+    });
+  },
+
+  // Releases
+  listReleases: () => api.get('/releases'),
+  getRelease: (id) => api.get(`/releases/${id}`),
+  createRelease: (data) => api.post('/releases', data),
+  publishRelease: (id) => api.post(`/releases/${id}/publish`),
+
+  // Rollouts
+  listRollouts: () => api.get('/rollouts'),
+  getRollout: (id) => api.get(`/rollouts/${id}`),
+  getRolloutProgress: (id) => api.get(`/rollouts/${id}/progress`),
+  createRollout: (data) => api.post('/rollouts', data),
+  pauseRollout: (id) => api.post(`/rollouts/${id}/pause`),
+  resumeRollout: (id) => api.post(`/rollouts/${id}/resume`),
+  rollbackRollout: (id, reason) => api.post(`/rollouts/${id}/rollback`, { reason }),
+
+  // Fleet
+  getFleetVersions: () => api.get('/fleet/versions'),
+
+  // Subnets
+  listSubnets: (includeArchived = true) => api.get(`/subnets?include_archived=${includeArchived}`),
+  getSubnet: (id) => api.get(`/subnets/${id}`),
+  getSubnetTargets: (id) => api.get(`/subnets/${id}/targets`),
+  getSubnetStats: (id) => api.get(`/subnets/${id}/stats`),
+  createSubnet: (data) => api.post('/subnets', data),
+  updateSubnet: (id, data) => api.put(`/subnets/${id}`, data),
+  archiveSubnet: (id, reason = '') => api.post(`/subnets/${id}/archive`, { reason }),
+
+  // Target state
+  getTargetStateHistory: (id, limit = 50) => api.get(`/targets/${id}/state-history?limit=${limit}`),
+  transitionTargetState: (id, newState, reason = '') =>
+    api.post(`/targets/${id}/state`, { new_state: newState, reason }),
+
+  // Review Queue (targets needing review)
+  getReviewQueue: () => api.get('/targets/review'),
+  acknowledgeTarget: (id, markInactive = false) =>
+    api.post(`/targets/${id}/acknowledge`, { mark_inactive: markInactive }),
+
+  // Activity Log
+  listActivity: (params = {}) => {
+    const query = new URLSearchParams(params).toString();
+    return api.get(`/activity${query ? `?${query}` : ''}`);
+  },
+  getTargetActivity: (id, limit = 50) => api.get(`/targets/${id}/activity?limit=${limit}`),
+  getSubnetActivity: (id, limit = 50) => api.get(`/subnets/${id}/activity?limit=${limit}`),
 };

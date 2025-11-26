@@ -16,8 +16,8 @@ export function Card({
   return (
     <div
       className={`
-        bg-pilot-navy rounded-lg p-6
-        border border-pilot-navy-light
+        bg-surface-secondary rounded-lg p-6
+        border border-theme
         ${accent ? accentColors[accent] : ''}
         ${hover ? 'hover:border-pilot-cyan transition-colors cursor-pointer' : ''}
         ${className}
@@ -39,7 +39,7 @@ export function CardHeader({ children, className = '' }) {
 
 export function CardTitle({ children, className = '' }) {
   return (
-    <h3 className={`text-lg font-semibold text-white ${className}`}>
+    <h3 className={`text-lg font-semibold text-theme-primary ${className}`}>
       {children}
     </h3>
   );
@@ -47,7 +47,7 @@ export function CardTitle({ children, className = '' }) {
 
 export function CardDescription({ children, className = '' }) {
   return (
-    <p className={`text-sm text-gray-400 mt-1 ${className}`}>
+    <p className={`text-sm text-theme-muted mt-1 ${className}`}>
       {children}
     </p>
   );
@@ -63,7 +63,7 @@ export function CardContent({ children, className = '' }) {
 
 export function CardFooter({ children, className = '' }) {
   return (
-    <div className={`mt-4 pt-4 border-t border-pilot-navy-light ${className}`}>
+    <div className={`mt-4 pt-4 border-t border-theme ${className}`}>
       {children}
     </div>
   );

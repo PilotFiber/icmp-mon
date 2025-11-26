@@ -51,8 +51,8 @@ const typeOptions = [
 const severityColors = {
   critical: 'text-pilot-red',
   major: 'text-warning',
-  minor: 'text-pilot-yellow',
-  warning: 'text-gray-400',
+  minor: 'text-accent',
+  warning: 'text-theme-muted',
 };
 
 const severityBgColors = {
@@ -223,8 +223,8 @@ export function Incidents() {
             <div className="flex items-center gap-3">
               <AlertTriangle className="w-6 h-6 text-pilot-red" />
               <div>
-                <h3 className="font-medium text-white">Failed to load incidents</h3>
-                <p className="text-sm text-gray-400">{error}</p>
+                <h3 className="font-medium text-theme-primary">Failed to load incidents</h3>
+                <p className="text-sm text-theme-muted">{error}</p>
               </div>
               <Button variant="secondary" size="sm" onClick={fetchIncidents} className="ml-auto">
                 Retry
@@ -313,7 +313,7 @@ export function Incidents() {
           <div className="lg:col-span-2">
             <Card>
               {filteredIncidents.length === 0 ? (
-                <div className="text-center py-12 text-gray-400">
+                <div className="text-center py-12 text-theme-muted">
                   <AlertCircle className="w-12 h-12 mx-auto mb-4 opacity-50" />
                   {incidents.length === 0 ? (
                     <>
@@ -335,17 +335,17 @@ export function Incidents() {
                       }}
                       className={`p-4 cursor-pointer transition-colors ${
                         selectedIncident?.id === incident.id
-                          ? 'bg-pilot-navy-light'
-                          : 'hover:bg-pilot-navy-dark'
+                          ? 'bg-surface-tertiary'
+                          : 'hover:bg-surface-primary'
                       }`}
                     >
                       <div className="flex items-start gap-3">
                         <div className={`p-2 rounded-lg ${severityBgColors[incident.severity] || 'bg-gray-500/20'}`}>
-                          <AlertCircle className={`w-5 h-5 ${severityColors[incident.severity] || 'text-gray-400'}`} />
+                          <AlertCircle className={`w-5 h-5 ${severityColors[incident.severity] || 'text-theme-muted'}`} />
                         </div>
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2 mb-1">
-                            <span className="font-medium text-white truncate">
+                            <span className="font-medium text-theme-primary truncate">
                               {getIncidentTitle(incident)}
                             </span>
                             <StatusBadge
@@ -354,7 +354,7 @@ export function Incidents() {
                               size="sm"
                             />
                           </div>
-                          <div className="flex items-center gap-4 text-sm text-gray-400">
+                          <div className="flex items-center gap-4 text-sm text-theme-muted">
                             {incident.target_ip && (
                               <span className="font-mono">{incident.target_ip}</span>
                             )}
@@ -369,7 +369,7 @@ export function Incidents() {
                               {getBlastRadiusLabel(incident.blast_radius)}
                             </span>
                           </div>
-                          <div className="flex items-center gap-4 mt-2 text-xs text-gray-500">
+                          <div className="flex items-center gap-4 mt-2 text-xs text-theme-muted">
                             <span className="flex items-center gap-1">
                               <Clock className="w-3 h-3" />
                               Started {formatRelativeTime(incident.started_at)}
@@ -382,7 +382,7 @@ export function Incidents() {
                             )}
                           </div>
                         </div>
-                        <ChevronRight className="w-5 h-5 text-gray-500 flex-shrink-0" />
+                        <ChevronRight className="w-5 h-5 text-theme-muted flex-shrink-0" />
                       </div>
                     </div>
                   ))}
@@ -412,7 +412,7 @@ export function Incidents() {
                       size="sm"
                     />
                   </div>
-                  <h3 className="text-lg font-semibold text-white">
+                  <h3 className="text-lg font-semibold text-theme-primary">
                     {getIncidentTitle(selectedIncident)}
                   </h3>
                 </div>
@@ -421,37 +421,37 @@ export function Incidents() {
                 <div className="space-y-3 mb-6">
                   {selectedIncident.target_ip && (
                     <div className="flex items-center justify-between">
-                      <span className="text-gray-400 text-sm">Target</span>
-                      <span className="font-mono text-white">{selectedIncident.target_ip}</span>
+                      <span className="text-theme-muted text-sm">Target</span>
+                      <span className="font-mono text-theme-primary">{selectedIncident.target_ip}</span>
                     </div>
                   )}
                   {selectedIncident.agent_name && (
                     <div className="flex items-center justify-between">
-                      <span className="text-gray-400 text-sm">Agent</span>
-                      <span className="text-white">{selectedIncident.agent_name}</span>
+                      <span className="text-theme-muted text-sm">Agent</span>
+                      <span className="text-theme-primary">{selectedIncident.agent_name}</span>
                     </div>
                   )}
                   <div className="flex items-center justify-between">
-                    <span className="text-gray-400 text-sm">Blast Radius</span>
-                    <span className="flex items-center gap-1 text-white">
+                    <span className="text-theme-muted text-sm">Blast Radius</span>
+                    <span className="flex items-center gap-1 text-theme-primary">
                       {getBlastRadiusIcon(selectedIncident.blast_radius)}
                       {getBlastRadiusLabel(selectedIncident.blast_radius)}
                     </span>
                   </div>
                   <div className="flex items-center justify-between">
-                    <span className="text-gray-400 text-sm">Started</span>
-                    <span className="text-white">{new Date(selectedIncident.started_at).toLocaleString()}</span>
+                    <span className="text-theme-muted text-sm">Started</span>
+                    <span className="text-theme-primary">{new Date(selectedIncident.started_at).toLocaleString()}</span>
                   </div>
                   {selectedIncident.resolved_at && (
                     <div className="flex items-center justify-between">
-                      <span className="text-gray-400 text-sm">Resolved</span>
-                      <span className="text-white">{new Date(selectedIncident.resolved_at).toLocaleString()}</span>
+                      <span className="text-theme-muted text-sm">Resolved</span>
+                      <span className="text-theme-primary">{new Date(selectedIncident.resolved_at).toLocaleString()}</span>
                     </div>
                   )}
                   {selectedIncident.acknowledged_by && (
                     <div className="flex items-center justify-between">
-                      <span className="text-gray-400 text-sm">Acknowledged By</span>
-                      <span className="flex items-center gap-1 text-white">
+                      <span className="text-theme-muted text-sm">Acknowledged By</span>
+                      <span className="flex items-center gap-1 text-theme-primary">
                         <User className="w-3 h-3" />
                         {selectedIncident.acknowledged_by}
                       </span>
@@ -496,8 +496,8 @@ export function Incidents() {
                 )}
 
                 {/* Timeline / Notes */}
-                <div className="border-t border-pilot-navy-light pt-4">
-                  <h4 className="text-sm font-medium text-gray-400 mb-3 flex items-center gap-2">
+                <div className="border-t border-theme pt-4">
+                  <h4 className="text-sm font-medium text-theme-muted mb-3 flex items-center gap-2">
                     <MessageSquare className="w-4 h-4" />
                     Notes & Timeline
                   </h4>
@@ -509,7 +509,7 @@ export function Incidents() {
                         value={newNote}
                         onChange={(e) => setNewNote(e.target.value)}
                         placeholder="Add a note..."
-                        className="w-full px-3 py-2 bg-pilot-navy-dark border border-pilot-navy-light rounded-lg text-white text-sm placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-pilot-cyan resize-none"
+                        className="w-full px-3 py-2 bg-surface-primary border border-theme rounded-lg text-theme-primary text-sm placeholder-theme-muted focus:outline-none focus:ring-2 focus:ring-pilot-cyan resize-none"
                         rows={2}
                       />
                       <Button
@@ -526,13 +526,13 @@ export function Incidents() {
                   {/* Notes List */}
                   <div className="space-y-3 max-h-64 overflow-y-auto">
                     {(selectedIncident.notes || []).length === 0 ? (
-                      <p className="text-sm text-gray-500 text-center py-4">No notes yet</p>
+                      <p className="text-sm text-theme-muted text-center py-4">No notes yet</p>
                     ) : (
                       selectedIncident.notes.map((note, idx) => (
-                        <div key={idx} className="bg-pilot-navy-dark rounded-lg p-3">
-                          <p className="text-sm text-white">{note.text || note}</p>
+                        <div key={idx} className="bg-surface-primary rounded-lg p-3">
+                          <p className="text-sm text-theme-primary">{note.text || note}</p>
                           {note.created_at && (
-                            <p className="text-xs text-gray-500 mt-1">
+                            <p className="text-xs text-theme-muted mt-1">
                               {formatRelativeTime(note.created_at)}
                               {note.author && ` by ${note.author}`}
                             </p>
@@ -543,7 +543,7 @@ export function Incidents() {
                   </div>
                 </div>
 
-                <div className="mt-4 pt-4 border-t border-pilot-navy-light">
+                <div className="mt-4 pt-4 border-t border-theme">
                   <Button
                     variant="ghost"
                     size="sm"
@@ -555,7 +555,7 @@ export function Incidents() {
               </Card>
             ) : (
               <Card>
-                <div className="text-center py-12 text-gray-400">
+                <div className="text-center py-12 text-theme-muted">
                   <AlertCircle className="w-12 h-12 mx-auto mb-4 opacity-50" />
                   <p>Select an incident to view details</p>
                 </div>

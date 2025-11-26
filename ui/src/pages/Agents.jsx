@@ -1,19 +1,22 @@
 import { useState, useEffect, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Server,
   MapPin,
   RefreshCw,
   ChevronRight,
   AlertTriangle,
+  Plus,
 } from 'lucide-react';
 
 import { PageHeader, PageContent } from '../components/Layout';
-import { Card, CardTitle, CardContent } from '../components/Card';
-import { MetricCard, MetricCardCompact } from '../components/MetricCard';
-import { StatusBadge, StatusDot } from '../components/StatusBadge';
+import { Card } from '../components/Card';
+import { MetricCard } from '../components/MetricCard';
+import { StatusBadge } from '../components/StatusBadge';
 import { Button } from '../components/Button';
 import { SearchInput, Select } from '../components/Input';
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '../components/Table';
+import { EnrollAgentModal } from '../components/EnrollAgentModal';
 import { formatRelativeTime } from '../lib/utils';
 import { endpoints } from '../lib/api';
 
@@ -33,6 +36,7 @@ const statuses = [
 ];
 
 export function Agents() {
+  const navigate = useNavigate();
   const [agents, setAgents] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -40,7 +44,7 @@ export function Agents() {
   const [regionFilter, setRegionFilter] = useState('');
   const [providerFilter, setProviderFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
-  const [selectedAgent, setSelectedAgent] = useState(null);
+  const [showEnrollModal, setShowEnrollModal] = useState(false);
 
   const fetchAgents = async () => {
     try {
@@ -115,8 +119,8 @@ export function Agents() {
             <div className="flex items-center gap-3">
               <AlertTriangle className="w-6 h-6 text-pilot-red" />
               <div>
-                <h3 className="font-medium text-white">Failed to load agents</h3>
-                <p className="text-sm text-gray-400">{error}</p>
+                <h3 className="font-medium text-theme-primary">Failed to load agents</h3>
+                <p className="text-sm text-theme-muted">{error}</p>
               </div>
               <Button variant="secondary" size="sm" onClick={fetchAgents} className="ml-auto">
                 Retry
@@ -134,10 +138,16 @@ export function Agents() {
         title="Agents"
         description={`${stats.total} agents registered`}
         actions={
-          <Button variant="secondary" onClick={fetchAgents} className="gap-2">
-            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-            Refresh
-          </Button>
+          <div className="flex gap-3">
+            <Button variant="secondary" onClick={fetchAgents} className="gap-2">
+              <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+              Refresh
+            </Button>
+            <Button onClick={() => setShowEnrollModal(true)} className="gap-2">
+              <Plus className="w-4 h-4" />
+              Enroll Agent
+            </Button>
+          </div>
         }
       />
 
@@ -199,7 +209,7 @@ export function Agents() {
         {/* Agent List */}
         <Card>
           {filteredAgents.length === 0 ? (
-            <div className="text-center py-12 text-gray-400">
+            <div className="text-center py-12 text-theme-muted">
               <Server className="w-12 h-12 mx-auto mb-4 opacity-50" />
               {agents.length === 0 ? (
                 <>
@@ -227,26 +237,26 @@ export function Agents() {
                 {filteredAgents.map((agent) => (
                   <TableRow
                     key={agent.id}
-                    onClick={() => setSelectedAgent(agent)}
+                    onClick={() => navigate(`/agents/${agent.id}`)}
                     className="cursor-pointer"
                   >
                     <TableCell>
                       <div className="flex items-center gap-3">
-                        <div className="p-2 bg-pilot-navy-light rounded-lg">
+                        <div className="p-2 bg-surface-tertiary rounded-lg">
                           <Server className="w-4 h-4 text-pilot-cyan" />
                         </div>
                         <div>
-                          <div className="font-medium text-white">{agent.name}</div>
-                          <div className="text-xs text-gray-500">{agent.provider}</div>
+                          <div className="font-medium text-theme-primary">{agent.name}</div>
+                          <div className="text-xs text-theme-muted">{agent.provider}</div>
                         </div>
                       </div>
                     </TableCell>
                     <TableCell>
                       <div className="flex items-center gap-2">
-                        <MapPin className="w-4 h-4 text-gray-500" />
+                        <MapPin className="w-4 h-4 text-theme-muted" />
                         <div>
-                          <div className="text-sm text-white">{agent.region || 'Unknown'}</div>
-                          <div className="text-xs text-gray-500">{agent.location || ''}</div>
+                          <div className="text-sm text-theme-primary">{agent.region || 'Unknown'}</div>
+                          <div className="text-xs text-theme-muted">{agent.location || ''}</div>
                         </div>
                       </div>
                     </TableCell>
@@ -258,17 +268,17 @@ export function Agents() {
                         size="sm"
                       />
                     </TableCell>
-                    <TableCell className="text-gray-400">
+                    <TableCell className="text-theme-muted">
                       {agent.version || 'unknown'}
                     </TableCell>
-                    <TableCell className="font-mono text-sm text-gray-400">
+                    <TableCell className="font-mono text-sm text-theme-muted">
                       {agent.public_ip || '—'}
                     </TableCell>
-                    <TableCell className="text-gray-400 text-sm">
+                    <TableCell className="text-theme-muted text-sm">
                       {agent.last_heartbeat ? formatRelativeTime(agent.last_heartbeat) : 'Never'}
                     </TableCell>
                     <TableCell>
-                      <ChevronRight className="w-4 h-4 text-gray-500" />
+                      <ChevronRight className="w-4 h-4 text-theme-muted" />
                     </TableCell>
                   </TableRow>
                 ))}
@@ -277,54 +287,17 @@ export function Agents() {
           )}
         </Card>
 
-        {/* Agent Detail Panel */}
-        {selectedAgent && (
-          <Card className="mt-6" accent="cyan">
-            <div className="flex items-start justify-between mb-6">
-              <div>
-                <h3 className="text-xl font-semibold text-white">{selectedAgent.name}</h3>
-                <p className="text-gray-400">
-                  {selectedAgent.location} • {selectedAgent.provider}
-                </p>
-              </div>
-              <StatusBadge
-                status={selectedAgent.status === 'active' ? 'healthy' : selectedAgent.status === 'degraded' ? 'degraded' : 'down'}
-                label={selectedAgent.status}
-              />
-            </div>
-
-            <div className="grid grid-cols-2 md:grid-cols-5 gap-6">
-              <MetricCardCompact title="Region" value={selectedAgent.region || 'Unknown'} />
-              <MetricCardCompact title="Provider" value={selectedAgent.provider || 'Unknown'} />
-              <MetricCardCompact title="Version" value={selectedAgent.version || 'unknown'} />
-              <MetricCardCompact title="Max Targets" value={selectedAgent.max_targets?.toLocaleString() || '—'} />
-              <MetricCardCompact title="Public IP" value={selectedAgent.public_ip || '—'} />
-            </div>
-
-            {selectedAgent.executors && selectedAgent.executors.length > 0 && (
-              <div className="mt-6 pt-6 border-t border-pilot-navy-light">
-                <h4 className="text-sm font-medium text-gray-400 mb-3">Executors</h4>
-                <div className="flex flex-wrap gap-2">
-                  {selectedAgent.executors.map((executor) => (
-                    <span
-                      key={executor}
-                      className="px-3 py-1 rounded-full text-sm bg-pilot-navy-light text-pilot-cyan"
-                    >
-                      {executor}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            <div className="mt-6 flex gap-3">
-              <Button variant="ghost" size="sm" onClick={() => setSelectedAgent(null)}>
-                Close
-              </Button>
-            </div>
-          </Card>
-        )}
       </PageContent>
+
+      {/* Enroll Agent Modal */}
+      <EnrollAgentModal
+        isOpen={showEnrollModal}
+        onClose={() => setShowEnrollModal(false)}
+        onSuccess={() => {
+          setShowEnrollModal(false);
+          fetchAgents();
+        }}
+      />
     </>
   );
 }

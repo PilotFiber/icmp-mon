@@ -16,6 +16,21 @@
 //   - POST /api/v1/targets - Create target
 //   - GET  /api/v1/tiers - List tiers
 //
+// Subnet API:
+//   - GET    /api/v1/subnets - List all subnets
+//   - POST   /api/v1/subnets - Create subnet
+//   - GET    /api/v1/subnets/{id} - Get subnet details
+//   - PUT    /api/v1/subnets/{id} - Update subnet
+//   - POST   /api/v1/subnets/{id}/archive - Archive subnet
+//   - GET    /api/v1/subnets/{id}/targets - List targets in subnet
+//   - GET    /api/v1/subnets/{id}/stats - Get subnet target counts
+//
+// Target State API:
+//   - GET    /api/v1/targets/review - List targets needing review
+//   - POST   /api/v1/targets/{id}/state - Transition target state
+//   - POST   /api/v1/targets/{id}/acknowledge - Acknowledge target
+//   - GET    /api/v1/targets/{id}/state-history - Get state transition history
+//
 // Results API:
 //   - POST /api/v1/results - Ingest probe results
 //
@@ -55,6 +70,11 @@ func NewServer(svc *service.Service, logger *slog.Logger) *Server {
 	}
 	s.registerRoutes()
 	return s
+}
+
+// Mux returns the underlying ServeMux for registering additional routes.
+func (s *Server) Mux() *http.ServeMux {
+	return s.mux
 }
 
 // ServeHTTP implements http.Handler.
@@ -109,6 +129,7 @@ func (s *Server) registerRoutes() {
 
 	// Metrics
 	s.mux.HandleFunc("GET /api/v1/metrics/latency", s.handleGetLatencyTrend)
+	s.mux.HandleFunc("POST /api/v1/metrics/query", s.handleQueryMetrics)
 
 	// Tiers
 	s.mux.HandleFunc("GET /api/v1/tiers", s.handleListTiers)
@@ -134,6 +155,31 @@ func (s *Server) registerRoutes() {
 
 	// Results ingestion
 	s.mux.HandleFunc("POST /api/v1/results", s.handleIngestResults)
+
+	// Subnets
+	s.mux.HandleFunc("GET /api/v1/subnets", s.handleListSubnets)
+	s.mux.HandleFunc("POST /api/v1/subnets", s.handleCreateSubnet)
+	s.mux.HandleFunc("GET /api/v1/subnets/{id}", s.handleGetSubnet)
+	s.mux.HandleFunc("PUT /api/v1/subnets/{id}", s.handleUpdateSubnet)
+	s.mux.HandleFunc("POST /api/v1/subnets/{id}/archive", s.handleArchiveSubnet)
+	s.mux.HandleFunc("GET /api/v1/subnets/{id}/targets", s.handleListSubnetTargets)
+	s.mux.HandleFunc("GET /api/v1/subnets/{id}/stats", s.handleGetSubnetStats)
+	s.mux.HandleFunc("POST /api/v1/subnets/{id}/seed", s.handleSeedSubnetTargets)
+
+	// Target state management
+	s.mux.HandleFunc("GET /api/v1/targets/review", s.handleListTargetsNeedingReview)
+	s.mux.HandleFunc("POST /api/v1/targets/{id}/state", s.handleTransitionTargetState)
+	s.mux.HandleFunc("POST /api/v1/targets/{id}/acknowledge", s.handleAcknowledgeTarget)
+	s.mux.HandleFunc("GET /api/v1/targets/{id}/state-history", s.handleGetTargetStateHistory)
+
+	// Target update/delete
+	s.mux.HandleFunc("PUT /api/v1/targets/{id}", s.handleUpdateTarget)
+	s.mux.HandleFunc("DELETE /api/v1/targets/{id}", s.handleDeleteTarget)
+
+	// Activity log
+	s.mux.HandleFunc("GET /api/v1/activity", s.handleListActivity)
+	s.mux.HandleFunc("GET /api/v1/targets/{id}/activity", s.handleGetTargetActivity)
+	s.mux.HandleFunc("GET /api/v1/subnets/{id}/activity", s.handleGetSubnetActivity)
 }
 
 // =============================================================================
@@ -1104,6 +1150,33 @@ func (s *Server) handleGetTargetReport(w http.ResponseWriter, r *http.Request) {
 		"window_days": windowDays,
 		"report":      report,
 	})
+}
+
+// =============================================================================
+// FLEXIBLE METRICS QUERY
+// =============================================================================
+
+func (s *Server) handleQueryMetrics(w http.ResponseWriter, r *http.Request) {
+	var query types.MetricsQuery
+	if err := s.readJSON(r, &query); err != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	// Validate the query
+	if err := query.Validate(); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	result, err := s.svc.QueryMetrics(r.Context(), &query)
+	if err != nil {
+		s.logger.Error("metrics query failed", "error", err)
+		s.writeError(w, http.StatusInternalServerError, "failed to execute metrics query")
+		return
+	}
+
+	s.writeJSON(w, http.StatusOK, result)
 }
 
 // parseInt parses a string to int, returning error if invalid.

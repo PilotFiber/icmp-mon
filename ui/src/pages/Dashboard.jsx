@@ -173,8 +173,8 @@ export function Dashboard() {
             <div className="flex items-center gap-3">
               <AlertTriangle className="w-6 h-6 text-pilot-red" />
               <div>
-                <h3 className="font-medium text-white">Failed to load data</h3>
-                <p className="text-sm text-gray-400">{error}</p>
+                <h3 className="font-medium text-theme-primary">Failed to load data</h3>
+                <p className="text-sm text-theme-muted">{error}</p>
               </div>
               <Button variant="secondary" size="sm" onClick={fetchData} className="ml-auto">
                 Retry
@@ -219,10 +219,10 @@ export function Dashboard() {
             <div className="flex items-center gap-3">
               <AlertCircle className="w-6 h-6 text-pilot-red" />
               <div className="flex-1">
-                <h3 className="font-medium text-white">
+                <h3 className="font-medium text-theme-primary">
                   {activeIncidents} Active Incident{activeIncidents !== 1 ? 's' : ''}
                 </h3>
-                <p className="text-sm text-gray-400">Click to view and manage incidents</p>
+                <p className="text-sm text-theme-muted">Click to view and manage incidents</p>
               </div>
               <Button variant="danger" size="sm">View Incidents</Button>
             </div>
@@ -274,7 +274,7 @@ export function Dashboard() {
             </div>
             <CardContent>
               {agents.length === 0 ? (
-                <div className="text-center py-8 text-gray-400">
+                <div className="text-center py-8 text-theme-muted">
                   <Server className="w-12 h-12 mx-auto mb-3 opacity-50" />
                   <p>No agents registered</p>
                   <p className="text-sm mt-1">Start an agent to begin monitoring</p>
@@ -284,11 +284,11 @@ export function Dashboard() {
                   {Object.entries(agentsByProvider).map(([provider, data]) => {
                     const ProviderIcon = getProviderIcon(provider);
                     return (
-                      <div key={provider} className="bg-pilot-navy-dark rounded-lg p-3">
+                      <div key={provider} className="bg-surface-primary rounded-lg p-3">
                         <div className="flex items-center justify-between mb-2">
                           <div className="flex items-center gap-2">
                             <ProviderIcon className="w-4 h-4 text-pilot-cyan" />
-                            <span className="font-medium text-white capitalize">{provider}</span>
+                            <span className="font-medium text-theme-primary capitalize">{provider}</span>
                           </div>
                           <span className={`text-sm ${data.active < data.total ? 'text-warning' : 'text-status-healthy'}`}>
                             {data.active}/{data.total} active
@@ -303,9 +303,9 @@ export function Dashboard() {
                                   pulse={agent.status === 'active'}
                                   size="sm"
                                 />
-                                <span className="text-gray-300">{agent.name}</span>
+                                <span className="text-theme-secondary">{agent.name}</span>
                               </div>
-                              <span className="text-xs text-gray-500">{agent.location || agent.region}</span>
+                              <span className="text-xs text-theme-muted">{agent.location || agent.region}</span>
                             </div>
                           ))}
                         </div>
@@ -381,7 +381,7 @@ export function Dashboard() {
             <CardTitle>Agent Coverage by Region</CardTitle>
             <CardContent className="mt-4">
               {agentsByRegion.length === 0 ? (
-                <div className="text-center py-8 text-gray-400">
+                <div className="text-center py-8 text-theme-muted">
                   <MapPin className="w-12 h-12 mx-auto mb-3 opacity-50" />
                   <p>No agents registered</p>
                 </div>
@@ -414,7 +414,7 @@ export function Dashboard() {
             <CardTitle>Monitoring Tiers</CardTitle>
             <CardContent className="mt-4">
               {tiers.length === 0 ? (
-                <div className="text-center py-8 text-gray-400">
+                <div className="text-center py-8 text-theme-muted">
                   <p>No tiers configured</p>
                 </div>
               ) : (
@@ -433,7 +433,7 @@ export function Dashboard() {
                         <TableCell>
                           <span className="font-medium capitalize">{tier.displayName || tier.tier}</span>
                         </TableCell>
-                        <TableCell className="text-gray-400">
+                        <TableCell className="text-theme-muted">
                           {tier.interval}
                         </TableCell>
                         <TableCell className="text-center">
@@ -452,7 +452,7 @@ export function Dashboard() {
                             )}
                           </div>
                         </TableCell>
-                        <TableCell className="text-right text-white">
+                        <TableCell className="text-right text-theme-primary">
                           {tier.count.toLocaleString()}
                         </TableCell>
                       </TableRow>
@@ -479,7 +479,7 @@ export function Dashboard() {
             </div>
             <CardContent>
               {incidents.length === 0 ? (
-                <div className="text-center py-8 text-gray-400">
+                <div className="text-center py-8 text-theme-muted">
                   <AlertCircle className="w-12 h-12 mx-auto mb-3 opacity-50" />
                   <p>No active incidents</p>
                   <p className="text-sm mt-1">All systems operational</p>
@@ -489,17 +489,17 @@ export function Dashboard() {
                   {incidents.slice(0, 5).map(incident => (
                     <div
                       key={incident.id}
-                      className="flex items-start gap-3 p-3 bg-pilot-navy-dark rounded-lg cursor-pointer hover:bg-pilot-navy-light transition-colors"
+                      className="flex items-start gap-3 p-3 bg-surface-primary rounded-lg cursor-pointer hover:bg-surface-tertiary transition-colors"
                       onClick={() => navigate('/incidents')}
                     >
                       <AlertCircle className={`w-5 h-5 flex-shrink-0 ${
                         incident.severity === 'critical' ? 'text-pilot-red' :
                         incident.severity === 'major' ? 'text-warning' :
-                        'text-pilot-yellow'
+                        'text-accent'
                       }`} />
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2">
-                          <span className="font-medium text-white truncate">
+                          <span className="font-medium text-theme-primary truncate">
                             {incident.title || `${incident.incident_type} on ${incident.target_ip || 'multiple targets'}`}
                           </span>
                           <StatusBadge
@@ -508,7 +508,7 @@ export function Dashboard() {
                             size="sm"
                           />
                         </div>
-                        <p className="text-sm text-gray-400 truncate">
+                        <p className="text-sm text-theme-muted truncate">
                           {incident.blast_radius} • Started {formatRelativeTime(incident.started_at)}
                         </p>
                       </div>
@@ -532,7 +532,7 @@ export function Dashboard() {
             </div>
             <CardContent>
               {targets.length === 0 ? (
-                <div className="text-center py-8 text-gray-400">
+                <div className="text-center py-8 text-theme-muted">
                   <Target className="w-12 h-12 mx-auto mb-3 opacity-50" />
                   <p>No targets configured</p>
                   <p className="text-sm mt-1">Add targets to begin monitoring</p>
@@ -570,9 +570,9 @@ export function Dashboard() {
                             />
                           </TableCell>
                           <TableCell>
-                            <span className="capitalize text-gray-400">{target.tier}</span>
+                            <span className="capitalize text-theme-muted">{target.tier}</span>
                           </TableCell>
-                          <TableCell className="text-right font-mono text-gray-400">
+                          <TableCell className="text-right font-mono text-theme-muted">
                             {status?.avg_latency_ms != null ? `${status.avg_latency_ms.toFixed(1)}ms` : '—'}
                           </TableCell>
                         </TableRow>

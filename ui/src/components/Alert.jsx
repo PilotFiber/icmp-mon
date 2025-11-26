@@ -45,14 +45,14 @@ export function Alert({
         <Icon className={`w-5 h-5 mt-0.5 ${config.iconColor}`} />
         <div className="flex-1">
           {title && (
-            <h4 className="font-medium text-white mb-1">{title}</h4>
+            <h4 className="font-medium text-theme-primary mb-1">{title}</h4>
           )}
-          <div className="text-sm text-gray-300">{children}</div>
+          <div className="text-sm text-theme-secondary">{children}</div>
         </div>
         {onDismiss && (
           <button
             onClick={onDismiss}
-            className="text-gray-400 hover:text-white transition-colors"
+            className="text-theme-muted hover:text-theme-primary transition-colors"
           >
             <X className="w-4 h-4" />
           </button>
@@ -76,17 +76,17 @@ export function AlertCard({
     critical: {
       bg: 'bg-pilot-red/10',
       border: 'border-l-pilot-red',
-      badge: 'bg-pilot-red text-white',
+      badge: 'bg-pilot-red text-theme-primary',
     },
     warning: {
       bg: 'bg-warning/10',
       border: 'border-l-warning',
-      badge: 'bg-warning text-pilot-navy',
+      badge: 'bg-warning text-neutral-900',
     },
     info: {
       bg: 'bg-pilot-cyan/10',
       border: 'border-l-pilot-cyan',
-      badge: 'bg-pilot-cyan text-pilot-navy',
+      badge: 'bg-pilot-cyan text-neutral-900',
     },
   };
 
@@ -107,13 +107,13 @@ export function AlertCard({
               {severity.toUpperCase()}
             </span>
             {timestamp && (
-              <span className="text-xs text-gray-500">{timestamp}</span>
+              <span className="text-xs text-theme-muted">{timestamp}</span>
             )}
           </div>
-          <h4 className="font-medium text-white mb-1">{title}</h4>
-          <p className="text-sm text-gray-400">{message}</p>
+          <h4 className="font-medium text-theme-primary mb-1">{title}</h4>
+          <p className="text-sm text-theme-muted">{message}</p>
           {(target || agent) && (
-            <div className="flex gap-4 mt-2 text-xs text-gray-500">
+            <div className="flex gap-4 mt-2 text-xs text-theme-muted">
               {target && <span>Target: {target}</span>}
               {agent && <span>Agent: {agent}</span>}
             </div>

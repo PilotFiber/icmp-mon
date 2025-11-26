@@ -1,22 +1,32 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { ThemeProvider } from './context/ThemeContext';
 import { Layout } from './components/Layout';
-import { Dashboard, Agents, Targets, Incidents, Snapshots, Alerts, Settings } from './pages';
+import { Dashboard, Agents, AgentDetail, Targets, TargetDetail, Incidents, Snapshots, Alerts, Settings, Fleet, MetricsExplorer, Subnets, SubnetDetail, ReviewQueue } from './pages';
 
 function App() {
   return (
-    <BrowserRouter>
-      <Routes>
-        <Route path="/" element={<Layout />}>
-          <Route index element={<Dashboard />} />
-          <Route path="agents" element={<Agents />} />
-          <Route path="targets" element={<Targets />} />
-          <Route path="incidents" element={<Incidents />} />
-          <Route path="snapshots" element={<Snapshots />} />
-          <Route path="alerts" element={<Alerts />} />
-          <Route path="settings" element={<Settings />} />
-        </Route>
-      </Routes>
-    </BrowserRouter>
+    <ThemeProvider>
+      <BrowserRouter>
+        <Routes>
+          <Route path="/" element={<Layout />}>
+            <Route index element={<Dashboard />} />
+            <Route path="agents" element={<Agents />} />
+            <Route path="agents/:id" element={<AgentDetail />} />
+            <Route path="fleet" element={<Fleet />} />
+            <Route path="targets" element={<Targets />} />
+            <Route path="targets/:id" element={<TargetDetail />} />
+            <Route path="subnets" element={<Subnets />} />
+            <Route path="subnets/:id" element={<SubnetDetail />} />
+            <Route path="review" element={<ReviewQueue />} />
+            <Route path="metrics" element={<MetricsExplorer />} />
+            <Route path="incidents" element={<Incidents />} />
+            <Route path="snapshots" element={<Snapshots />} />
+            <Route path="alerts" element={<Alerts />} />
+            <Route path="settings" element={<Settings />} />
+          </Route>
+        </Routes>
+      </BrowserRouter>
+    </ThemeProvider>
   );
 }
 

@@ -43,6 +43,9 @@ services:
     environment:
       ICMPMON_DATABASE_URL: postgres://icmpmon:icmpmon@timescaledb:5432/icmpmon?sslmode=disable
       ICMPMON_DEBUG: "true"
+      # 1Password Service Account for SSH key management
+      OP_SERVICE_ACCOUNT_TOKEN: ${OP_SERVICE_ACCOUNT_TOKEN}
+      OP_VAULT: ${OP_VAULT:-icmp-mon keys}
     ports:
       - "8081:8080"
     depends_on:

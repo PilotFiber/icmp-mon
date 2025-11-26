@@ -69,7 +69,13 @@ func (s *Store) GetAgent(ctx context.Context, id string) (*types.Agent, error) {
 	var agent types.Agent
 	var tagsJSON []byte
 	err := s.pool.QueryRow(ctx, `
-		SELECT id, name, region, location, provider, tags, public_ip::text, executors, max_targets, version, status, last_heartbeat, created_at
+		SELECT id, name, region, location, provider, tags, public_ip::text, executors, max_targets, version,
+			CASE
+				WHEN last_heartbeat IS NULL OR last_heartbeat < NOW() - INTERVAL '60 seconds' THEN 'offline'
+				WHEN last_heartbeat < NOW() - INTERVAL '30 seconds' THEN 'degraded'
+				ELSE 'active'
+			END as status,
+			last_heartbeat, created_at
 		FROM agents WHERE id = $1
 	`, id).Scan(
 		&agent.ID, &agent.Name, &agent.Region, &agent.Location, &agent.Provider,
@@ -91,7 +97,13 @@ func (s *Store) GetAgentByName(ctx context.Context, name string) (*types.Agent, 
 	var agent types.Agent
 	var tagsJSON []byte
 	err := s.pool.QueryRow(ctx, `
-		SELECT id, name, region, location, provider, tags, public_ip::text, executors, max_targets, version, status, last_heartbeat, created_at
+		SELECT id, name, region, location, provider, tags, public_ip::text, executors, max_targets, version,
+			CASE
+				WHEN last_heartbeat IS NULL OR last_heartbeat < NOW() - INTERVAL '60 seconds' THEN 'offline'
+				WHEN last_heartbeat < NOW() - INTERVAL '30 seconds' THEN 'degraded'
+				ELSE 'active'
+			END as status,
+			last_heartbeat, created_at
 		FROM agents WHERE name = $1
 	`, name).Scan(
 		&agent.ID, &agent.Name, &agent.Region, &agent.Location, &agent.Provider,
@@ -108,10 +120,16 @@ func (s *Store) GetAgentByName(ctx context.Context, name string) (*types.Agent, 
 	return &agent, nil
 }
 
-// ListAgents returns all agents.
+// ListAgents returns all agents with status computed from heartbeat age.
 func (s *Store) ListAgents(ctx context.Context) ([]types.Agent, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, name, region, location, provider, tags, public_ip::text, executors, max_targets, version, status, last_heartbeat, created_at
+		SELECT id, name, region, location, provider, tags, public_ip::text, executors, max_targets, version,
+			CASE
+				WHEN last_heartbeat IS NULL OR last_heartbeat < NOW() - INTERVAL '60 seconds' THEN 'offline'
+				WHEN last_heartbeat < NOW() - INTERVAL '30 seconds' THEN 'degraded'
+				ELSE 'active'
+			END as status,
+			last_heartbeat, created_at
 		FROM agents ORDER BY name
 	`)
 	if err != nil {
@@ -233,16 +251,50 @@ func (s *Store) CreateTarget(ctx context.Context, target *types.Target) error {
 	return err
 }
 
+// AutoTargetParams contains parameters for auto-creating targets from subnets.
+type AutoTargetParams struct {
+	ID              string
+	IP              string
+	SubnetID        string
+	IPType          types.IPType
+	Tier            string
+	Ownership       types.OwnershipType
+	Origin          types.OriginType
+	MonitoringState types.MonitoringState
+	DisplayName     string
+	Tags            map[string]string
+}
+
+// CreateAutoTarget creates a target with full auto-seeding parameters.
+// Used when auto-creating targets from subnet definitions.
+func (s *Store) CreateAutoTarget(ctx context.Context, params AutoTargetParams) error {
+	tagsJSON, _ := json.Marshal(params.Tags)
+
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO targets (
+			id, ip_address, subnet_id, ip_type, tier,
+			ownership, origin, monitoring_state, display_name, tags
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		ON CONFLICT (ip_address) DO NOTHING
+	`, params.ID, params.IP, params.SubnetID, params.IPType, params.Tier,
+		params.Ownership, params.Origin, params.MonitoringState, params.DisplayName, tagsJSON)
+	return err
+}
+
 // GetTarget retrieves a target by ID.
 func (s *Store) GetTarget(ctx context.Context, id string) (*types.Target, error) {
 	var target types.Target
 	var tagsJSON, expectedJSON []byte
-	var subscriberID *string
+	var subscriberID, subnetID *string
 	err := s.pool.QueryRow(ctx, `
-		SELECT id, host(ip_address), tier, subscriber_id, tags, expected_outcome, created_at, updated_at
+		SELECT id, host(ip_address), tier, subscriber_id, tags, expected_outcome,
+			monitoring_state, archived_at, subnet_id,
+			created_at, updated_at
 		FROM targets WHERE id = $1
 	`, id).Scan(
 		&target.ID, &target.IP, &target.Tier, &subscriberID, &tagsJSON, &expectedJSON,
+		&target.MonitoringState, &target.ArchivedAt, &subnetID,
 		&target.CreatedAt, &target.UpdatedAt,
 	)
 	if err == pgx.ErrNoRows {
@@ -254,6 +306,9 @@ func (s *Store) GetTarget(ctx context.Context, id string) (*types.Target, error)
 	if subscriberID != nil {
 		target.SubscriberID = *subscriberID
 	}
+	if subnetID != nil {
+		target.SubnetID = subnetID
+	}
 	json.Unmarshal(tagsJSON, &target.Tags)
 	json.Unmarshal(expectedJSON, &target.ExpectedOutcome)
 	return &target, nil
@@ -262,7 +317,12 @@ func (s *Store) GetTarget(ctx context.Context, id string) (*types.Target, error)
 // ListTargets returns all targets.
 func (s *Store) ListTargets(ctx context.Context) ([]types.Target, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, host(ip_address), tier, subscriber_id, tags, expected_outcome, created_at, updated_at
+		SELECT
+			id, host(ip_address), tier, subscriber_id, tags, display_name, notes,
+			subnet_id, ownership, origin, ip_type,
+			monitoring_state, state_changed_at, needs_review, discovery_attempts, last_response_at,
+			first_response_at, baseline_established_at,
+			archived_at, archive_reason, expected_outcome, created_at, updated_at
 		FROM targets ORDER BY ip_address
 	`)
 	if err != nil {
@@ -270,31 +330,18 @@ func (s *Store) ListTargets(ctx context.Context) ([]types.Target, error) {
 	}
 	defer rows.Close()
 
-	var targets []types.Target
-	for rows.Next() {
-		var target types.Target
-		var tagsJSON, expectedJSON []byte
-		var subscriberID *string
-		if err := rows.Scan(
-			&target.ID, &target.IP, &target.Tier, &subscriberID, &tagsJSON, &expectedJSON,
-			&target.CreatedAt, &target.UpdatedAt,
-		); err != nil {
-			return nil, err
-		}
-		if subscriberID != nil {
-			target.SubscriberID = *subscriberID
-		}
-		json.Unmarshal(tagsJSON, &target.Tags)
-		json.Unmarshal(expectedJSON, &target.ExpectedOutcome)
-		targets = append(targets, target)
-	}
-	return targets, nil
+	return s.scanTargets(rows)
 }
 
 // ListTargetsByTier returns targets in a specific tier.
 func (s *Store) ListTargetsByTier(ctx context.Context, tier string) ([]types.Target, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, host(ip_address), tier, subscriber_id, tags, expected_outcome, created_at, updated_at
+		SELECT
+			id, host(ip_address), tier, subscriber_id, tags, display_name, notes,
+			subnet_id, ownership, origin, ip_type,
+			monitoring_state, state_changed_at, needs_review, discovery_attempts, last_response_at,
+			first_response_at, baseline_established_at,
+			archived_at, archive_reason, expected_outcome, created_at, updated_at
 		FROM targets WHERE tier = $1 ORDER BY ip_address
 	`, tier)
 	if err != nil {
@@ -302,25 +349,7 @@ func (s *Store) ListTargetsByTier(ctx context.Context, tier string) ([]types.Tar
 	}
 	defer rows.Close()
 
-	var targets []types.Target
-	for rows.Next() {
-		var target types.Target
-		var tagsJSON, expectedJSON []byte
-		var subscriberID *string
-		if err := rows.Scan(
-			&target.ID, &target.IP, &target.Tier, &subscriberID, &tagsJSON, &expectedJSON,
-			&target.CreatedAt, &target.UpdatedAt,
-		); err != nil {
-			return nil, err
-		}
-		if subscriberID != nil {
-			target.SubscriberID = *subscriberID
-		}
-		json.Unmarshal(tagsJSON, &target.Tags)
-		json.Unmarshal(expectedJSON, &target.ExpectedOutcome)
-		targets = append(targets, target)
-	}
-	return targets, nil
+	return s.scanTargets(rows)
 }
 
 // =============================================================================
@@ -1543,4 +1572,520 @@ func (s *Store) GetTargetReport(ctx context.Context, targetID string, windowDays
 		reports = append(reports, r)
 	}
 	return reports, nil
+}
+
+// =============================================================================
+// FLEXIBLE METRICS QUERY
+// =============================================================================
+
+// QueryMetrics executes a flexible metrics query with tag-based filtering.
+// Designed for scale: filters agents/targets first, then queries aggregates.
+func (s *Store) QueryMetrics(ctx context.Context, query *types.MetricsQuery) (*types.MetricsQueryResult, error) {
+	startTime := time.Now()
+
+	// Resolve time range
+	window, err := query.TimeRange.GetWindowDuration()
+	if err != nil {
+		return nil, fmt.Errorf("invalid time range: %w", err)
+	}
+
+	cutoffTime := time.Now().Add(-window)
+	if query.TimeRange.Start != nil {
+		cutoffTime = *query.TimeRange.Start
+	}
+
+	// Auto-select bucket if not specified
+	bucket := query.Bucket
+	if bucket == "" {
+		bucket = types.AutoSelectBucket(window)
+	}
+	bucketInterval := bucket
+
+	// Select the right aggregate table
+	aggTable := types.SelectAggregateTable(window, bucket)
+
+	// Apply defaults
+	metrics := query.Metrics
+	if len(metrics) == 0 {
+		metrics = []string{"avg_latency", "packet_loss"}
+	}
+
+	groupBy := query.GroupBy
+	if len(groupBy) == 0 {
+		groupBy = []string{"time"}
+	}
+
+	limit := query.Limit
+	if limit <= 0 {
+		limit = 10000
+	}
+
+	// Build the query with CTEs for efficient filtering
+	sql, args, err := s.buildMetricsQuery(query, cutoffTime, bucketInterval, aggTable, metrics, groupBy, limit)
+	if err != nil {
+		return nil, fmt.Errorf("building query: %w", err)
+	}
+
+	// Execute query
+	rows, err := s.pool.Query(ctx, sql, args...)
+	if err != nil {
+		return nil, fmt.Errorf("executing query: %w", err)
+	}
+	defer rows.Close()
+
+	// Parse results into series
+	seriesMap := make(map[string]*types.MetricsSeries)
+	var totalPoints int
+
+	for rows.Next() {
+		point, groupKey, err := s.scanMetricsRow(rows, metrics, groupBy)
+		if err != nil {
+			return nil, fmt.Errorf("scanning row: %w", err)
+		}
+
+		series, exists := seriesMap[groupKey.Key]
+		if !exists {
+			series = &types.MetricsSeries{
+				AgentID:       groupKey.AgentID,
+				AgentName:     groupKey.AgentName,
+				AgentRegion:   groupKey.AgentRegion,
+				AgentProvider: groupKey.AgentProvider,
+				TargetID:      groupKey.TargetID,
+				TargetIP:      groupKey.TargetIP,
+				TargetTier:    groupKey.TargetTier,
+				Points:        make([]types.MetricsDataPoint, 0),
+			}
+			seriesMap[groupKey.Key] = series
+		}
+		series.Points = append(series.Points, point)
+		totalPoints++
+	}
+
+	// Convert map to slice
+	seriesList := make([]types.MetricsSeries, 0, len(seriesMap))
+	for _, s := range seriesMap {
+		seriesList = append(seriesList, *s)
+	}
+
+	// Get filter match counts (for transparency)
+	matchedAgents, matchedTargets := s.countFilterMatches(ctx, query)
+
+	return &types.MetricsQueryResult{
+		Query:          *query,
+		ExecutedAt:     startTime,
+		ExecutionMs:    time.Since(startTime).Milliseconds(),
+		AggregateTable: aggTable,
+		MatchedAgents:  matchedAgents,
+		MatchedTargets: matchedTargets,
+		Series:         seriesList,
+		TotalPoints:    totalPoints,
+	}, nil
+}
+
+// buildMetricsQuery constructs the SQL query with CTEs for efficient filtering.
+func (s *Store) buildMetricsQuery(
+	query *types.MetricsQuery,
+	cutoffTime time.Time,
+	bucket string,
+	aggTable string,
+	metrics []string,
+	groupBy []string,
+	limit int,
+) (string, []any, error) {
+	args := []any{}
+	argIdx := 1
+
+	// Build agent filter CTE
+	agentCTE, agentArgs, nextIdx := buildAgentFilterCTE(query.AgentFilter, argIdx)
+	args = append(args, agentArgs...)
+	argIdx = nextIdx
+
+	// Build target filter CTE
+	targetCTE, targetArgs, nextIdx := buildTargetFilterCTE(query.TargetFilter, argIdx)
+	args = append(args, targetArgs...)
+	argIdx = nextIdx
+
+	// Time cutoff argument
+	cutoffArg := fmt.Sprintf("$%d", argIdx)
+	args = append(args, cutoffTime)
+	argIdx++
+
+	// Bucket argument
+	bucketArg := fmt.Sprintf("$%d", argIdx)
+	args = append(args, bucket)
+	argIdx++
+
+	// Limit argument
+	limitArg := fmt.Sprintf("$%d", argIdx)
+	args = append(args, limit)
+
+	// Build SELECT clause based on requested metrics
+	selectCols := buildMetricsSelectClause(metrics, aggTable)
+
+	// Build GROUP BY clause
+	groupByCols := buildGroupByClause(groupBy)
+
+	// Build the main query
+	var timeCol string
+	switch aggTable {
+	case "probe_results":
+		timeCol = "pr.time"
+	default:
+		timeCol = "pr.bucket"
+	}
+
+	sql := fmt.Sprintf(`
+		WITH filtered_agents AS (
+			%s
+		),
+		filtered_targets AS (
+			%s
+		)
+		SELECT
+			time_bucket(%s::interval, %s) as bucket,
+			%s
+			%s
+		FROM %s pr
+		JOIN filtered_agents fa ON pr.agent_id = fa.id
+		JOIN filtered_targets ft ON pr.target_id = ft.id
+		LEFT JOIN agents a ON a.id = pr.agent_id
+		LEFT JOIN targets t ON t.id = pr.target_id
+		WHERE %s > %s
+		GROUP BY time_bucket(%s::interval, %s)%s
+		ORDER BY bucket ASC
+		LIMIT %s
+	`, agentCTE, targetCTE, bucketArg, timeCol, buildGroupBySelectClause(groupBy), selectCols,
+		aggTable, timeCol, cutoffArg, bucketArg, timeCol, groupByCols, limitArg)
+
+	return sql, args, nil
+}
+
+// buildAgentFilterCTE creates the CTE for filtering agents.
+func buildAgentFilterCTE(filter *types.AgentFilter, startIdx int) (string, []any, int) {
+	if filter == nil {
+		return "SELECT id FROM agents LIMIT 1000", nil, startIdx
+	}
+
+	conditions := []string{}
+	args := []any{}
+	idx := startIdx
+
+	// Filter by IDs
+	if len(filter.IDs) > 0 {
+		conditions = append(conditions, fmt.Sprintf("id = ANY($%d)", idx))
+		args = append(args, filter.IDs)
+		idx++
+	}
+
+	// Filter by regions
+	if len(filter.Regions) > 0 {
+		conditions = append(conditions, fmt.Sprintf("region = ANY($%d)", idx))
+		args = append(args, filter.Regions)
+		idx++
+	}
+
+	// Filter by providers
+	if len(filter.Providers) > 0 {
+		conditions = append(conditions, fmt.Sprintf("provider = ANY($%d)", idx))
+		args = append(args, filter.Providers)
+		idx++
+	}
+
+	// Filter by tags (all must match)
+	if len(filter.Tags) > 0 {
+		tagsJSON, _ := json.Marshal(filter.Tags)
+		conditions = append(conditions, fmt.Sprintf("tags @> $%d", idx))
+		args = append(args, tagsJSON)
+		idx++
+	}
+
+	// Exclude by tags
+	if len(filter.ExcludeTags) > 0 {
+		tagsJSON, _ := json.Marshal(filter.ExcludeTags)
+		conditions = append(conditions, fmt.Sprintf("NOT tags @> $%d", idx))
+		args = append(args, tagsJSON)
+		idx++
+	}
+
+	if len(conditions) == 0 {
+		return "SELECT id FROM agents LIMIT 1000", args, idx
+	}
+
+	sql := fmt.Sprintf("SELECT id FROM agents WHERE %s LIMIT 1000",
+		joinConditions(conditions, " AND "))
+	return sql, args, idx
+}
+
+// buildTargetFilterCTE creates the CTE for filtering targets.
+func buildTargetFilterCTE(filter *types.TargetFilter, startIdx int) (string, []any, int) {
+	if filter == nil {
+		return "SELECT id FROM targets LIMIT 10000", nil, startIdx
+	}
+
+	conditions := []string{}
+	args := []any{}
+	idx := startIdx
+
+	// Filter by IDs
+	if len(filter.IDs) > 0 {
+		conditions = append(conditions, fmt.Sprintf("id = ANY($%d)", idx))
+		args = append(args, filter.IDs)
+		idx++
+	}
+
+	// Filter by tiers
+	if len(filter.Tiers) > 0 {
+		conditions = append(conditions, fmt.Sprintf("tier = ANY($%d)", idx))
+		args = append(args, filter.Tiers)
+		idx++
+	}
+
+	// Filter by tags (all must match)
+	if len(filter.Tags) > 0 {
+		tagsJSON, _ := json.Marshal(filter.Tags)
+		conditions = append(conditions, fmt.Sprintf("tags @> $%d", idx))
+		args = append(args, tagsJSON)
+		idx++
+	}
+
+	// Exclude by tags
+	if len(filter.ExcludeTags) > 0 {
+		tagsJSON, _ := json.Marshal(filter.ExcludeTags)
+		conditions = append(conditions, fmt.Sprintf("NOT tags @> $%d", idx))
+		args = append(args, tagsJSON)
+		idx++
+	}
+
+	if len(conditions) == 0 {
+		return "SELECT id FROM targets LIMIT 10000", args, idx
+	}
+
+	sql := fmt.Sprintf("SELECT id FROM targets WHERE %s LIMIT 10000",
+		joinConditions(conditions, " AND "))
+	return sql, args, idx
+}
+
+// buildMetricsSelectClause creates SELECT columns for requested metrics.
+func buildMetricsSelectClause(metrics []string, aggTable string) string {
+	cols := []string{}
+
+	// Map metric names to SQL expressions based on aggregate table
+	for _, m := range metrics {
+		switch m {
+		case "avg_latency":
+			if aggTable == "probe_results" {
+				cols = append(cols, "AVG(pr.latency_ms) FILTER (WHERE pr.success) as avg_latency")
+			} else {
+				cols = append(cols, "AVG(pr.avg_latency) as avg_latency")
+			}
+		case "min_latency":
+			if aggTable == "probe_results" {
+				cols = append(cols, "MIN(pr.latency_ms) FILTER (WHERE pr.success) as min_latency")
+			} else {
+				cols = append(cols, "MIN(pr.min_latency) as min_latency")
+			}
+		case "max_latency":
+			if aggTable == "probe_results" {
+				cols = append(cols, "MAX(pr.latency_ms) FILTER (WHERE pr.success) as max_latency")
+			} else {
+				cols = append(cols, "MAX(pr.max_latency) as max_latency")
+			}
+		case "p50_latency":
+			if aggTable == "probe_results" {
+				cols = append(cols, "percentile_cont(0.5) WITHIN GROUP (ORDER BY pr.latency_ms) FILTER (WHERE pr.success) as p50_latency")
+			} else {
+				cols = append(cols, "AVG(pr.p50_latency) as p50_latency")
+			}
+		case "p95_latency":
+			if aggTable == "probe_results" {
+				cols = append(cols, "percentile_cont(0.95) WITHIN GROUP (ORDER BY pr.latency_ms) FILTER (WHERE pr.success) as p95_latency")
+			} else {
+				cols = append(cols, "AVG(pr.p95_latency) as p95_latency")
+			}
+		case "p99_latency":
+			if aggTable == "probe_results" {
+				cols = append(cols, "percentile_cont(0.99) WITHIN GROUP (ORDER BY pr.latency_ms) FILTER (WHERE pr.success) as p99_latency")
+			} else {
+				cols = append(cols, "AVG(pr.p99_latency) as p99_latency")
+			}
+		case "jitter":
+			if aggTable == "probe_results" {
+				cols = append(cols, "STDDEV(pr.latency_ms) FILTER (WHERE pr.success) as jitter")
+			} else if aggTable == "probe_hourly" {
+				cols = append(cols, "AVG(pr.latency_stddev) as jitter")
+			} else {
+				cols = append(cols, "AVG(pr.avg_jitter) as jitter")
+			}
+		case "packet_loss":
+			if aggTable == "probe_results" {
+				cols = append(cols, "AVG(pr.packet_loss_pct) as packet_loss")
+			} else {
+				cols = append(cols, "AVG(pr.avg_packet_loss) as packet_loss")
+			}
+		case "success_rate":
+			if aggTable == "probe_results" {
+				cols = append(cols, "SUM(CASE WHEN pr.success THEN 1 ELSE 0 END)::float / NULLIF(COUNT(*), 0) * 100 as success_rate")
+			} else {
+				cols = append(cols, "SUM(pr.success_count)::float / NULLIF(SUM(pr.probe_count), 0) * 100 as success_rate")
+			}
+		case "probe_count":
+			if aggTable == "probe_results" {
+				cols = append(cols, "COUNT(*) as probe_count")
+			} else {
+				cols = append(cols, "SUM(pr.probe_count) as probe_count")
+			}
+		}
+	}
+
+	return joinConditions(cols, ", ")
+}
+
+// buildGroupByClause creates the GROUP BY columns (excluding time bucket).
+func buildGroupByClause(groupBy []string) string {
+	cols := []string{}
+	for _, g := range groupBy {
+		switch g {
+		case "agent":
+			cols = append(cols, "pr.agent_id", "a.name")
+		case "agent_region":
+			cols = append(cols, "a.region")
+		case "agent_provider":
+			cols = append(cols, "a.provider")
+		case "target":
+			cols = append(cols, "pr.target_id", "t.ip_address", "t.tier")
+		case "target_tier":
+			cols = append(cols, "t.tier")
+		// "time" is always included via bucket
+		}
+	}
+	if len(cols) == 0 {
+		return ""
+	}
+	return ", " + joinConditions(cols, ", ")
+}
+
+// buildGroupBySelectClause creates SELECT columns for grouping dimensions.
+func buildGroupBySelectClause(groupBy []string) string {
+	cols := []string{}
+	for _, g := range groupBy {
+		switch g {
+		case "agent":
+			cols = append(cols, "pr.agent_id", "COALESCE(a.name, pr.agent_id::text) as agent_name")
+		case "agent_region":
+			cols = append(cols, "COALESCE(a.region, '') as agent_region")
+		case "agent_provider":
+			cols = append(cols, "COALESCE(a.provider, '') as agent_provider")
+		case "target":
+			cols = append(cols, "pr.target_id", "host(t.ip_address) as target_ip", "t.tier as target_tier")
+		case "target_tier":
+			cols = append(cols, "COALESCE(t.tier, '') as target_tier")
+		}
+	}
+	if len(cols) == 0 {
+		return ""
+	}
+	return joinConditions(cols, ", ") + ","
+}
+
+// metricsGroupKey holds grouping dimension values for result parsing.
+type metricsGroupKey struct {
+	Key           string
+	AgentID       string
+	AgentName     string
+	AgentRegion   string
+	AgentProvider string
+	TargetID      string
+	TargetIP      string
+	TargetTier    string
+}
+
+// scanMetricsRow scans a result row into a data point and group key.
+func (s *Store) scanMetricsRow(rows pgx.Rows, metrics []string, groupBy []string) (types.MetricsDataPoint, metricsGroupKey, error) {
+	var point types.MetricsDataPoint
+	var key metricsGroupKey
+
+	// Build scan destinations dynamically
+	dests := []any{&point.Time}
+
+	// Add group-by columns
+	for _, g := range groupBy {
+		switch g {
+		case "agent":
+			dests = append(dests, &key.AgentID, &key.AgentName)
+		case "agent_region":
+			dests = append(dests, &key.AgentRegion)
+		case "agent_provider":
+			dests = append(dests, &key.AgentProvider)
+		case "target":
+			dests = append(dests, &key.TargetID, &key.TargetIP, &key.TargetTier)
+		case "target_tier":
+			dests = append(dests, &key.TargetTier)
+		}
+	}
+
+	// Add metric columns
+	for _, m := range metrics {
+		switch m {
+		case "avg_latency":
+			dests = append(dests, &point.AvgLatency)
+		case "min_latency":
+			dests = append(dests, &point.MinLatency)
+		case "max_latency":
+			dests = append(dests, &point.MaxLatency)
+		case "p50_latency":
+			dests = append(dests, &point.P50Latency)
+		case "p95_latency":
+			dests = append(dests, &point.P95Latency)
+		case "p99_latency":
+			dests = append(dests, &point.P99Latency)
+		case "jitter":
+			dests = append(dests, &point.Jitter)
+		case "packet_loss":
+			dests = append(dests, &point.PacketLoss)
+		case "success_rate":
+			dests = append(dests, &point.SuccessRate)
+		case "probe_count":
+			dests = append(dests, &point.ProbeCount)
+		}
+	}
+
+	if err := rows.Scan(dests...); err != nil {
+		return point, key, err
+	}
+
+	// Build composite key for grouping
+	key.Key = fmt.Sprintf("%s|%s|%s|%s|%s|%s",
+		key.AgentID, key.AgentRegion, key.AgentProvider,
+		key.TargetID, key.TargetIP, key.TargetTier)
+
+	return point, key, nil
+}
+
+// countFilterMatches returns the count of agents/targets matching filters.
+func (s *Store) countFilterMatches(ctx context.Context, query *types.MetricsQuery) (int, int) {
+	var agentCount, targetCount int
+
+	// Count matched agents
+	agentCTE, agentArgs, _ := buildAgentFilterCTE(query.AgentFilter, 1)
+	agentSQL := fmt.Sprintf("SELECT COUNT(*) FROM (%s) sub", agentCTE)
+	s.pool.QueryRow(ctx, agentSQL, agentArgs...).Scan(&agentCount)
+
+	// Count matched targets
+	targetCTE, targetArgs, _ := buildTargetFilterCTE(query.TargetFilter, 1)
+	targetSQL := fmt.Sprintf("SELECT COUNT(*) FROM (%s) sub", targetCTE)
+	s.pool.QueryRow(ctx, targetSQL, targetArgs...).Scan(&targetCount)
+
+	return agentCount, targetCount
+}
+
+// joinConditions joins condition strings with a separator.
+func joinConditions(conditions []string, sep string) string {
+	if len(conditions) == 0 {
+		return ""
+	}
+	result := conditions[0]
+	for i := 1; i < len(conditions); i++ {
+		result += sep + conditions[i]
+	}
+	return result
 }

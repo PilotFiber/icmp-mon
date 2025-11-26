@@ -87,8 +87,8 @@ export function Snapshots() {
               <Camera className="w-6 h-6 text-pilot-cyan" />
             </div>
             <div>
-              <h3 className="font-medium text-white mb-1">Maintenance Snapshots</h3>
-              <p className="text-sm text-gray-400">
+              <h3 className="font-medium text-theme-primary mb-1">Maintenance Snapshots</h3>
+              <p className="text-sm text-theme-muted">
                 Create snapshots before and after maintenance windows to compare network state.
                 Snapshots capture the current probe results for all or selected targets,
                 allowing you to detect regressions and verify improvements.
@@ -117,16 +117,16 @@ export function Snapshots() {
                   <TableRow key={snapshot.id} className="cursor-pointer">
                     <TableCell>
                       <div>
-                        <div className="font-medium text-white">{snapshot.name}</div>
-                        <div className="text-xs text-gray-500">{snapshot.description}</div>
+                        <div className="font-medium text-theme-primary">{snapshot.name}</div>
+                        <div className="text-xs text-theme-muted">{snapshot.description}</div>
                       </div>
                     </TableCell>
                     <TableCell>
                       <div className="flex items-center gap-2 text-sm">
-                        <Clock className="w-4 h-4 text-gray-500" />
+                        <Clock className="w-4 h-4 text-theme-muted" />
                         <div>
-                          <div className="text-white">{formatRelativeTime(snapshot.createdAt)}</div>
-                          <div className="text-xs text-gray-500">by {snapshot.createdBy}</div>
+                          <div className="text-theme-primary">{formatRelativeTime(snapshot.createdAt)}</div>
+                          <div className="text-xs text-theme-muted">by {snapshot.createdBy}</div>
                         </div>
                       </div>
                     </TableCell>
@@ -168,7 +168,7 @@ export function Snapshots() {
                       )}
                     </TableCell>
                     <TableCell>
-                      <ChevronRight className="w-4 h-4 text-gray-500" />
+                      <ChevronRight className="w-4 h-4 text-theme-muted" />
                     </TableCell>
                   </TableRow>
                 ))}

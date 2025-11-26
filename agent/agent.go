@@ -26,6 +26,7 @@ import (
 	"github.com/pilot-net/icmp-mon/agent/internal/executor"
 	"github.com/pilot-net/icmp-mon/agent/internal/scheduler"
 	"github.com/pilot-net/icmp-mon/agent/internal/shipper"
+	"github.com/pilot-net/icmp-mon/agent/internal/updater"
 	"github.com/pilot-net/icmp-mon/pkg/types"
 )
 
@@ -39,6 +40,7 @@ type Agent struct {
 	registry  *executor.Registry
 	scheduler *scheduler.Scheduler
 	shipper   *shipper.Shipper
+	updater   *updater.Updater
 	logger    *slog.Logger
 
 	// State
@@ -90,10 +92,18 @@ func New(cfg *config.Config, logger *slog.Logger) (*Agent, error) {
 		AuthToken: cfg.ControlPlane.Token,
 	})
 
+	// Create updater for self-updates
+	agentUpdater := updater.New(updater.Config{
+		InstallDir: "/usr/local/bin",
+		BinaryName: "icmpmon-agent",
+		Logger:     logger,
+	})
+
 	a := &Agent{
 		cfg:       cfg,
 		client:    cpClient,
 		registry:  registry,
+		updater:   agentUpdater,
 		logger:    logger,
 		startTime: time.Now(),
 	}
@@ -261,6 +271,11 @@ func (a *Agent) sendHeartbeat(ctx context.Context) error {
 		go a.executeCommand(context.Background(), cmd)
 	}
 
+	// Check for available updates
+	if resp.UpdateAvailable != nil {
+		go a.handleUpdate(context.Background(), resp.UpdateAvailable)
+	}
+
 	return nil
 }
 
@@ -396,9 +411,46 @@ func (a *Agent) executeMTR(ctx context.Context, cmd types.Command) types.Command
 	return result
 }
 
+// handleUpdate handles an available update from the control plane.
+func (a *Agent) handleUpdate(ctx context.Context, info *types.UpdateInfo) {
+	// Skip if already updating
+	if a.updater.IsUpdating() {
+		a.logger.Debug("update already in progress, skipping")
+		return
+	}
+
+	// Skip if we're already at this version
+	if info.Version == Version {
+		a.logger.Debug("already running target version", "version", Version)
+		return
+	}
+
+	a.logger.Info("update available",
+		"current_version", Version,
+		"new_version", info.Version,
+		"mandatory", info.Mandatory)
+
+	// Perform the update
+	if err := a.updater.Update(ctx, info); err != nil {
+		a.logger.Error("update failed", "error", err)
+		// TODO: Report update failure to control plane
+		return
+	}
+
+	a.logger.Info("update installed, requesting restart")
+
+	// Request restart via systemd
+	if err := a.updater.RequestRestart(); err != nil {
+		a.logger.Error("restart failed, manual restart required", "error", err)
+	}
+}
+
 // defaultTiers returns default tier configurations.
+// Includes both customer tiers (infrastructure, vip, standard) and
+// monitoring state machine tiers (discovery, inactive_recheck, smart_recheck).
 func defaultTiers() map[string]types.Tier {
 	return map[string]types.Tier{
+		// Customer monitoring tiers
 		"infrastructure": {
 			Name:          "infrastructure",
 			DisplayName:   "Infrastructure",
@@ -417,6 +469,28 @@ func defaultTiers() map[string]types.Tier {
 			Name:          "standard",
 			DisplayName:   "Standard",
 			ProbeInterval: 30 * time.Second,
+			ProbeTimeout:  5 * time.Second,
+			ProbeRetries:  0,
+		},
+		// Monitoring state machine tiers
+		"discovery": {
+			Name:          "discovery",
+			DisplayName:   "Discovery",
+			ProbeInterval: 30 * time.Second, // TODO: Change to 5*time.Minute for production
+			ProbeTimeout:  5 * time.Second,
+			ProbeRetries:  0,
+		},
+		"inactive_recheck": {
+			Name:          "inactive_recheck",
+			DisplayName:   "Inactive Recheck",
+			ProbeInterval: 1 * time.Hour,
+			ProbeTimeout:  5 * time.Second,
+			ProbeRetries:  0,
+		},
+		"smart_recheck": {
+			Name:          "smart_recheck",
+			DisplayName:   "Smart Recheck",
+			ProbeInterval: 24 * time.Hour,
 			ProbeTimeout:  5 * time.Second,
 			ProbeRetries:  0,
 		},

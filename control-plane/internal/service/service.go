@@ -125,6 +125,8 @@ func (s *Service) ProcessHeartbeat(ctx context.Context, heartbeat types.Heartbea
 }
 
 // GetAssignments returns assignments for an agent.
+// Uses persisted assignments from the target_assignments table.
+// Falls back to dynamic calculation if table is empty (for backward compatibility).
 func (s *Service) GetAssignments(ctx context.Context, agentID string) (*types.AssignmentSet, error) {
 	// Get agent to check it exists
 	agent, err := s.store.GetAgent(ctx, agentID)
@@ -135,6 +137,96 @@ func (s *Service) GetAssignments(ctx context.Context, agentID string) (*types.As
 		return &types.AssignmentSet{}, nil
 	}
 
+	// Get current version
+	version, err := s.store.GetAssignmentVersion(ctx)
+	if err != nil {
+		version = 0
+	}
+
+	// Try to get assignments from persisted table first
+	persistedAssignments, err := s.store.GetAssignmentsByAgent(ctx, agentID)
+	if err != nil {
+		s.logger.Warn("failed to get persisted assignments, falling back to dynamic",
+			"agent_id", agentID,
+			"error", err,
+		)
+		return s.getAssignmentsDynamic(ctx, agent, version)
+	}
+
+	// If no persisted assignments exist, fall back to dynamic calculation
+	// This handles the case where assignments haven't been materialized yet
+	if len(persistedAssignments) == 0 {
+		return s.getAssignmentsDynamic(ctx, agent, version)
+	}
+
+	// Convert persisted assignments to full Assignment objects
+	assignments, err := s.enrichAssignments(ctx, persistedAssignments)
+	if err != nil {
+		s.logger.Warn("failed to enrich assignments, falling back to dynamic",
+			"agent_id", agentID,
+			"error", err,
+		)
+		return s.getAssignmentsDynamic(ctx, agent, version)
+	}
+
+	return &types.AssignmentSet{
+		Version:     version,
+		Assignments: assignments,
+		GeneratedAt: time.Now(),
+	}, nil
+}
+
+// enrichAssignments converts persisted assignments to full Assignment objects.
+func (s *Service) enrichAssignments(ctx context.Context, persisted []types.TargetAssignment) ([]types.Assignment, error) {
+	// Get all tiers for probe configuration
+	tiers, err := s.store.ListTiers(ctx)
+	if err != nil {
+		return nil, err
+	}
+	tierMap := make(map[string]types.Tier)
+	for _, t := range tiers {
+		tierMap[t.Name] = t
+	}
+
+	assignments := make([]types.Assignment, 0, len(persisted))
+
+	for _, pa := range persisted {
+		// Get target details
+		target, err := s.store.GetTarget(ctx, pa.TargetID)
+		if err != nil || target == nil {
+			continue // Skip if target no longer exists
+		}
+
+		// Get effective tier for this target's state
+		effectiveTier := s.GetEffectiveTier(ctx, target, tierMap)
+		if effectiveTier == nil {
+			continue
+		}
+
+		assignment := types.Assignment{
+			TargetID:        target.ID,
+			IP:              target.IP,
+			Tier:            effectiveTier.Name,
+			ProbeType:       "icmp_ping",
+			ProbeInterval:   effectiveTier.ProbeInterval,
+			ProbeTimeout:    effectiveTier.ProbeTimeout,
+			ProbeRetries:    effectiveTier.ProbeRetries,
+			Tags:            target.Tags,
+			ExpectedOutcome: target.ExpectedOutcome,
+		}
+
+		if target.ExpectedOutcome == nil && effectiveTier.DefaultExpectedOutcome != nil {
+			assignment.ExpectedOutcome = effectiveTier.DefaultExpectedOutcome
+		}
+
+		assignments = append(assignments, assignment)
+	}
+
+	return assignments, nil
+}
+
+// getAssignmentsDynamic calculates assignments dynamically (backward compatibility).
+func (s *Service) getAssignmentsDynamic(ctx context.Context, agent *types.Agent, version int64) (*types.AssignmentSet, error) {
 	// Get all tiers
 	tiers, err := s.store.ListTiers(ctx)
 	if err != nil {
@@ -160,12 +252,6 @@ func (s *Service) GetAssignments(ctx context.Context, agentID string) (*types.As
 	// Calculate assignments for this agent
 	assignments := s.calculateAssignments(agent, agents, targets, tierMap)
 
-	// Get current version
-	version, err := s.store.GetAssignmentVersion(ctx)
-	if err != nil {
-		version = 0
-	}
-
 	return &types.AssignmentSet{
 		Version:     version,
 		Assignments: assignments,
@@ -174,6 +260,8 @@ func (s *Service) GetAssignments(ctx context.Context, agentID string) (*types.As
 }
 
 // calculateAssignments determines which targets an agent should monitor.
+// Uses state-based tier selection: UNKNOWN targets use discovery tier,
+// UNRESPONSIVE/EXCLUDED use smart re-check, etc.
 func (s *Service) calculateAssignments(
 	agent *types.Agent,
 	allAgents []types.Agent,
@@ -182,25 +270,34 @@ func (s *Service) calculateAssignments(
 ) []types.Assignment {
 	var assignments []types.Assignment
 
+	// Create a background context for state-based tier lookups
+	ctx := context.Background()
+
 	for _, target := range targets {
-		tier, ok := tiers[target.Tier]
-		if !ok {
+		// Skip archived targets
+		if target.ArchivedAt != nil {
 			continue
 		}
 
+		// Get effective tier based on monitoring state
+		effectiveTier := s.GetEffectiveTier(ctx, &target, tiers)
+		if effectiveTier == nil {
+			continue // Target shouldn't be monitored (e.g., EXCLUDED with active coverage)
+		}
+
 		// Check if this agent should monitor this target
-		if !s.shouldAssign(agent, allAgents, target, tier) {
+		if !s.shouldAssign(agent, allAgents, target, *effectiveTier) {
 			continue
 		}
 
 		assignments = append(assignments, types.Assignment{
 			TargetID:        target.ID,
 			IP:              target.IP,
-			Tier:            target.Tier,
+			Tier:            effectiveTier.Name,
 			ProbeType:       "icmp_ping",
-			ProbeInterval:   tier.ProbeInterval,
-			ProbeTimeout:    tier.ProbeTimeout,
-			ProbeRetries:    tier.ProbeRetries,
+			ProbeInterval:   effectiveTier.ProbeInterval,
+			ProbeTimeout:    effectiveTier.ProbeTimeout,
+			ProbeRetries:    effectiveTier.ProbeRetries,
 			Tags:            target.Tags,
 			ExpectedOutcome: target.ExpectedOutcome,
 		})
@@ -434,7 +531,7 @@ func (s *Service) DeleteTier(ctx context.Context, name string) error {
 // RESULT INGESTION
 // =============================================================================
 
-// IngestResults stores probe results.
+// IngestResults stores probe results and processes state transitions.
 func (s *Service) IngestResults(ctx context.Context, batch types.ResultBatch) error {
 	if len(batch.Results) == 0 {
 		return nil
@@ -449,7 +546,21 @@ func (s *Service) IngestResults(ctx context.Context, batch types.ResultBatch) er
 		batch.Results[i].AgentID = batch.AgentID
 	}
 
-	return s.store.InsertProbeResults(ctx, batch.Results)
+	// Store the probe results
+	if err := s.store.InsertProbeResults(ctx, batch.Results); err != nil {
+		return err
+	}
+
+	// Process state transitions based on probe results
+	// This runs asynchronously to not block result ingestion
+	go func() {
+		bgCtx := context.Background()
+		if err := s.ProcessProbeResultsBatch(bgCtx, batch.Results); err != nil {
+			s.logger.Error("failed to process state transitions", "error", err)
+		}
+	}()
+
+	return nil
 }
 
 // =============================================================================
@@ -631,4 +742,13 @@ func (s *Service) RecalculateAllBaselines(ctx context.Context) (int, error) {
 // GetTargetReport returns a report for a target over a time window.
 func (s *Service) GetTargetReport(ctx context.Context, targetID string, windowDays int) ([]store.TargetReport, error) {
 	return s.store.GetTargetReport(ctx, targetID, windowDays)
+}
+
+// =============================================================================
+// FLEXIBLE METRICS QUERY
+// =============================================================================
+
+// QueryMetrics executes a flexible metrics query with tag-based filtering.
+func (s *Service) QueryMetrics(ctx context.Context, query *types.MetricsQuery) (*types.MetricsQueryResult, error) {
+	return s.store.QueryMetrics(ctx, query)
 }

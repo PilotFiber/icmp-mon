@@ -28,7 +28,20 @@ RUN CGO_ENABLED=0 GOOS=linux go build -o /bin/control-plane ./control-plane/cmd/
 # =============================================================================
 FROM alpine:3.19
 
-RUN apk add --no-cache ca-certificates tzdata
+RUN apk add --no-cache ca-certificates tzdata curl unzip
+
+# Install 1Password CLI for Service Account authentication
+# Detect architecture and download the correct binary
+ARG TARGETARCH
+RUN ARCH=$(case ${TARGETARCH:-$(uname -m)} in \
+        amd64|x86_64) echo "amd64" ;; \
+        arm64|aarch64) echo "arm64" ;; \
+        *) echo "amd64" ;; \
+    esac) && \
+    curl -sSfo op.zip "https://cache.agilebits.com/dist/1P/op2/pkg/v2.30.0/op_linux_${ARCH}_v2.30.0.zip" && \
+    unzip -d /usr/local/bin op.zip && \
+    rm op.zip && \
+    chmod +x /usr/local/bin/op
 
 COPY --from=builder /bin/control-plane /bin/control-plane
 

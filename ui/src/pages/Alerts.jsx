@@ -237,14 +237,14 @@ export function Alerts() {
                       <div className="flex items-center gap-2 mb-1">
                         <span className={`
                           px-2 py-0.5 rounded text-xs font-medium uppercase
-                          ${alert.severity === 'critical' ? 'bg-pilot-red text-white' : ''}
-                          ${alert.severity === 'warning' ? 'bg-warning text-pilot-navy' : ''}
-                          ${alert.severity === 'info' ? 'bg-pilot-cyan text-pilot-navy' : ''}
+                          ${alert.severity === 'critical' ? 'bg-pilot-red text-theme-primary' : ''}
+                          ${alert.severity === 'warning' ? 'bg-warning text-neutral-900' : ''}
+                          ${alert.severity === 'info' ? 'bg-pilot-cyan text-neutral-900' : ''}
                         `}>
                           {alert.severity}
                         </span>
                         {alert.tier && (
-                          <span className="text-xs text-gray-500 capitalize">{alert.tier}</span>
+                          <span className="text-xs text-theme-muted capitalize">{alert.tier}</span>
                         )}
                         {alert.resolvedAt && (
                           <span className="px-2 py-0.5 rounded text-xs bg-status-healthy/20 text-status-healthy">
@@ -257,22 +257,22 @@ export function Alerts() {
                           </span>
                         )}
                       </div>
-                      <h3 className="font-medium text-white">{alert.title}</h3>
-                      <p className="text-sm text-gray-400 mt-1">{alert.message}</p>
+                      <h3 className="font-medium text-theme-primary">{alert.title}</h3>
+                      <p className="text-sm text-theme-muted mt-1">{alert.message}</p>
 
-                      <div className="flex gap-4 mt-3 text-xs text-gray-500">
+                      <div className="flex gap-4 mt-3 text-xs text-theme-muted">
                         <span className="flex items-center gap-1">
                           <Clock className="w-3 h-3" />
                           {formatRelativeTime(alert.createdAt)}
                         </span>
                         {alert.target && (
-                          <span>Target: <span className="text-gray-300 font-mono">{alert.target}</span></span>
+                          <span>Target: <span className="text-theme-secondary font-mono">{alert.target}</span></span>
                         )}
                         {alert.agent && (
-                          <span>Agent: <span className="text-gray-300">{alert.agent}</span></span>
+                          <span>Agent: <span className="text-theme-secondary">{alert.agent}</span></span>
                         )}
                         {alert.acknowledgedBy && (
-                          <span>Acked by: <span className="text-gray-300">{alert.acknowledgedBy}</span></span>
+                          <span>Acked by: <span className="text-theme-secondary">{alert.acknowledgedBy}</span></span>
                         )}
                       </div>
                     </div>
@@ -299,7 +299,7 @@ export function Alerts() {
 
           {filteredAlerts.length === 0 && (
             <Card>
-              <div className="text-center py-12 text-gray-400">
+              <div className="text-center py-12 text-theme-muted">
                 <Bell className="w-12 h-12 mx-auto mb-4 opacity-50" />
                 <p>No alerts match your filters</p>
               </div>

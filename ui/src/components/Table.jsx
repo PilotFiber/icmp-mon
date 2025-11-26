@@ -10,7 +10,7 @@ export function Table({ children, className = '' }) {
 
 export function TableHeader({ children }) {
   return (
-    <thead className="bg-pilot-navy-dark border-b border-pilot-navy-light">
+    <thead className="bg-surface-primary border-b border-theme">
       {children}
     </thead>
   );
@@ -28,7 +28,7 @@ export function TableRow({ children, className = '', onClick = null }) {
   return (
     <tr
       className={`
-        ${onClick ? 'hover:bg-pilot-navy-light cursor-pointer' : ''}
+        ${onClick ? 'hover:bg-surface-tertiary cursor-pointer' : ''}
         transition-colors
         ${className}
       `}
@@ -43,7 +43,7 @@ export function TableHead({ children, className = '' }) {
   return (
     <th
       className={`
-        px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider
+        px-4 py-3 text-left text-xs font-medium text-theme-muted uppercase tracking-wider
         ${className}
       `}
     >
@@ -54,7 +54,7 @@ export function TableHead({ children, className = '' }) {
 
 export function TableCell({ children, className = '' }) {
   return (
-    <td className={`px-4 py-3 text-sm text-white ${className}`}>
+    <td className={`px-4 py-3 text-sm text-theme-primary ${className}`}>
       {children}
     </td>
   );

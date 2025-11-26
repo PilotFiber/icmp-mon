@@ -10,7 +10,7 @@ export const Input = forwardRef(({
   return (
     <div className="w-full">
       {label && (
-        <label className="block text-sm font-medium text-gray-300 mb-1.5">
+        <label className="block text-sm font-medium text-theme-secondary mb-1.5">
           {label}
         </label>
       )}
@@ -18,9 +18,9 @@ export const Input = forwardRef(({
         ref={ref}
         className={`
           w-full px-3 py-2
-          bg-pilot-navy-dark border border-pilot-navy-light rounded-lg
-          text-white placeholder-gray-500
-          focus:outline-none focus:ring-2 focus:ring-pilot-yellow focus:border-transparent
+          bg-surface-tertiary border border-theme rounded-lg
+          text-theme-primary placeholder-theme-muted
+          focus:outline-none focus:ring-2 focus:ring-pilot-cyan focus:border-transparent
           disabled:opacity-50 disabled:cursor-not-allowed
           ${error ? 'border-pilot-red focus:ring-pilot-red' : ''}
           ${className}
@@ -39,7 +39,7 @@ Input.displayName = 'Input';
 export function SearchInput({ value, onChange, placeholder = 'Search...', className = '' }) {
   return (
     <div className={`relative ${className}`}>
-      <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" />
+      <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-theme-muted" />
       <input
         type="text"
         value={value}
@@ -47,9 +47,9 @@ export function SearchInput({ value, onChange, placeholder = 'Search...', classN
         placeholder={placeholder}
         className="
           w-full pl-10 pr-4 py-2
-          bg-pilot-navy-dark border border-pilot-navy-light rounded-lg
-          text-white placeholder-gray-500
-          focus:outline-none focus:ring-2 focus:ring-pilot-yellow focus:border-transparent
+          bg-surface-tertiary border border-theme rounded-lg
+          text-theme-primary placeholder-theme-muted
+          focus:outline-none focus:ring-2 focus:ring-pilot-cyan focus:border-transparent
         "
       />
     </div>
@@ -60,7 +60,7 @@ export function Select({ label, options, value, onChange, className = '', ...pro
   return (
     <div className={`w-full ${className}`}>
       {label && (
-        <label className="block text-sm font-medium text-gray-300 mb-1.5">
+        <label className="block text-sm font-medium text-theme-secondary mb-1.5">
           {label}
         </label>
       )}
@@ -69,9 +69,9 @@ export function Select({ label, options, value, onChange, className = '', ...pro
         onChange={(e) => onChange(e.target.value)}
         className="
           w-full px-3 py-2
-          bg-pilot-navy-dark border border-pilot-navy-light rounded-lg
-          text-white
-          focus:outline-none focus:ring-2 focus:ring-pilot-yellow focus:border-transparent
+          bg-surface-tertiary border border-theme rounded-lg
+          text-theme-primary
+          focus:outline-none focus:ring-2 focus:ring-pilot-cyan focus:border-transparent
         "
         {...props}
       >

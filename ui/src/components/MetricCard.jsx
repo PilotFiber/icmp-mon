@@ -1,5 +1,4 @@
 import { TrendingUp, TrendingDown, Minus } from 'lucide-react';
-import { Card } from './Card';
 
 export function MetricCard({
   title,
@@ -9,73 +8,84 @@ export function MetricCard({
   changeLabel = '',
   icon: Icon = null,
   status = null,
+  size = 'default',
   className = '',
 }) {
   const getTrendIcon = () => {
     if (change === null || change === 0) {
-      return <Minus className="w-4 h-4 text-gray-400" />;
+      return <Minus className="w-3 h-3" />;
     }
     if (change > 0) {
-      return <TrendingUp className="w-4 h-4 text-status-healthy" />;
+      return <TrendingUp className="w-3 h-3" />;
     }
-    return <TrendingDown className="w-4 h-4 text-status-down" />;
+    return <TrendingDown className="w-3 h-3" />;
   };
 
   const getTrendColor = () => {
-    if (change === null || change === 0) return 'text-gray-400';
+    if (change === null || change === 0) return 'text-theme-muted';
     if (change > 0) return 'text-status-healthy';
     return 'text-status-down';
   };
 
-  const statusColors = {
-    healthy: 'border-l-status-healthy',
-    degraded: 'border-l-status-degraded',
-    down: 'border-l-status-down',
+  const accentLine = {
+    healthy: 'bg-emerald-500',
+    degraded: 'bg-amber-500',
+    down: 'bg-red-500',
   };
 
+  const isSmall = size === 'sm';
+
   return (
-    <Card
+    <div
       className={`
-        ${status ? `border-l-4 ${statusColors[status]}` : ''}
+        relative rounded-lg bg-surface-secondary border border-theme
+        ${isSmall ? 'p-3' : 'p-4'}
         ${className}
       `}
     >
-      <div className="flex items-start justify-between">
-        <div className="flex-1">
-          <p className="text-sm text-gray-400 mb-1">{title}</p>
+      {/* Status accent line */}
+      {status && (
+        <div className={`absolute left-0 top-2 bottom-2 w-0.5 rounded-full ${accentLine[status]}`} />
+      )}
+
+      <div className={`flex items-center justify-between ${status ? 'pl-3' : ''}`}>
+        <div className="min-w-0">
+          <p className="text-xs text-theme-muted mb-1">{title}</p>
           <div className="flex items-baseline gap-1">
-            <span className="text-3xl font-bold text-white">{value}</span>
-            {unit && <span className="text-lg text-gray-400">{unit}</span>}
+            <span className={`${isSmall ? 'text-lg' : 'text-xl'} font-semibold text-theme-secondary tabular-nums`}>
+              {value}
+            </span>
+            {unit && (
+              <span className="text-xs text-theme-muted">{unit}</span>
+            )}
           </div>
           {change !== null && (
-            <div className={`flex items-center gap-1 mt-2 ${getTrendColor()}`}>
+            <div className={`flex items-center gap-1 mt-1 ${getTrendColor()}`}>
               {getTrendIcon()}
-              <span className="text-sm font-medium">
+              <span className="text-xs tabular-nums">
                 {change > 0 ? '+' : ''}{change}%
               </span>
               {changeLabel && (
-                <span className="text-gray-500 text-sm">{changeLabel}</span>
+                <span className="text-theme-muted text-xs">{changeLabel}</span>
               )}
             </div>
           )}
         </div>
         {Icon && (
-          <div className="p-3 bg-pilot-navy-light rounded-lg">
-            <Icon className="w-6 h-6 text-pilot-cyan" />
-          </div>
+          <Icon className={`${isSmall ? 'w-4 h-4' : 'w-5 h-5'} text-theme-muted`} />
         )}
       </div>
-    </Card>
+    </div>
   );
 }
 
 export function MetricCardCompact({ title, value, unit = '', className = '' }) {
   return (
     <div className={`text-center ${className}`}>
-      <p className="text-xs text-gray-400 uppercase tracking-wide">{title}</p>
+      <p className="text-xs text-theme-muted uppercase tracking-wide">{title}</p>
       <div className="flex items-baseline justify-center gap-0.5 mt-1">
-        <span className="text-xl font-bold text-white">{value}</span>
-        {unit && <span className="text-sm text-gray-400">{unit}</span>}
+        <span className="text-xl font-bold text-theme-primary">{value}</span>
+        {unit && <span className="text-sm text-theme-muted">{unit}</span>}
       </div>
     </div>
   );

@@ -4,14 +4,29 @@
 @theme {
   /* Brand Colors */
   --color-pilot-yellow: #FFE200;
-  --color-pilot-navy: #18284F;
   --color-pilot-cyan: #6EDBE0;
   --color-pilot-red: #FC534E;
 
+  /* Dark mode - subtle blue undertones for futuristic feel */
+  --color-surface-primary: #0c0f14;
+  --color-surface-secondary: #12161e;
+  --color-surface-tertiary: #1a1f2a;
+  --color-surface-elevated: #222836;
+  --color-border: #2a3142;
+  --color-border-subtle: #1e2430;
+
+  /* Text colors - dark mode */
+  --color-text-primary: #f0f2f5;
+  --color-text-secondary: #9ca3b0;
+  --color-text-muted: #6b7280;
+
+  /* Legacy aliases for compatibility */
+  --color-pilot-navy: #12161e;
+  --color-pilot-navy-light: #222836;
+  --color-pilot-navy-dark: #0c0f14;
+
   /* Extended palette */
   --color-pilot-yellow-light: #FFF066;
-  --color-pilot-navy-light: #2A3D6B;
-  --color-pilot-navy-dark: #0F1A33;
   --color-pilot-cyan-light: #9AE8EC;
   --color-pilot-cyan-dark: #4ABFC4;
 
@@ -36,6 +51,36 @@
   --animate-scale-in: scale-in 0.2s ease-out;
   --animate-slide-up: slide-up 0.3s ease-out;
   --animate-pulse-status: pulse-status 2s ease-in-out infinite;
+}
+
+/* Theme-aware accent color */
+:root {
+  --color-accent: #FFE200;
+  --color-accent-text: #D4A500;
+  --color-accent-hover: #FFF066;
+}
+
+/* Light mode overrides */
+.light {
+  --color-surface-primary: #f8fafc;
+  --color-surface-secondary: #ffffff;
+  --color-surface-tertiary: #f1f5f9;
+  --color-surface-elevated: #e2e8f0;
+  --color-border: #cbd5e1;
+  --color-border-subtle: #e2e8f0;
+
+  --color-text-primary: #0f172a;
+  --color-text-secondary: #475569;
+  --color-text-muted: #64748b;
+
+  --color-pilot-navy: #ffffff;
+  --color-pilot-navy-light: #e2e8f0;
+  --color-pilot-navy-dark: #f8fafc;
+
+  /* Darker amber for light mode - visible on white */
+  --color-accent: #B8860B;
+  --color-accent-text: #92400E;
+  --color-accent-hover: #D4A500;
 }
 
 @keyframes fade-in {
@@ -90,14 +135,81 @@ html {
 }
 
 body {
-  @apply bg-pilot-navy-dark text-white font-sans;
+  background-color: var(--color-surface-primary);
+  color: var(--color-text-primary);
+  font-family: var(--font-sans);
   margin: 0;
   min-height: 100vh;
+  transition: background-color 0.2s ease, color 0.2s ease;
 }
 
-/* Focus ring utility - Pilot yellow */
+/* Focus ring utility - Pilot cyan (visible on both light/dark) */
 .focus-ring {
-  @apply focus:outline-none focus:ring-2 focus:ring-pilot-yellow focus:ring-offset-2 focus:ring-offset-pilot-navy;
+  @apply focus:outline-none focus:ring-2 focus:ring-pilot-cyan focus:ring-offset-2;
+}
+
+/* Text color utilities that respond to theme */
+.text-theme-primary {
+  color: var(--color-text-primary);
+}
+
+.text-theme-secondary {
+  color: var(--color-text-secondary);
+}
+
+.text-theme-muted {
+  color: var(--color-text-muted);
+}
+
+.bg-theme-muted {
+  background-color: var(--color-text-muted);
+}
+
+/* Surface utilities */
+.bg-surface-primary {
+  background-color: var(--color-surface-primary);
+}
+
+.bg-surface-secondary {
+  background-color: var(--color-surface-secondary);
+}
+
+.bg-surface-tertiary {
+  background-color: var(--color-surface-tertiary);
+}
+
+.bg-surface-elevated {
+  background-color: var(--color-surface-elevated);
+}
+
+.border-theme {
+  border-color: var(--color-border);
+}
+
+.border-theme-subtle {
+  border-color: var(--color-border-subtle);
+}
+
+/* Placeholder color */
+.placeholder-theme-muted::placeholder {
+  color: var(--color-text-muted);
+}
+
+/* Theme-aware accent utilities */
+.text-accent {
+  color: var(--color-accent-text);
+}
+
+.bg-accent {
+  background-color: var(--color-accent);
+}
+
+.border-accent {
+  border-color: var(--color-accent);
+}
+
+.ring-accent {
+  --tw-ring-color: var(--color-accent);
 }
 
 /* Scrollbar styling */
@@ -107,13 +219,14 @@ body {
 }
 
 ::-webkit-scrollbar-track {
-  @apply bg-pilot-navy-dark;
+  background-color: var(--color-surface-primary);
 }
 
 ::-webkit-scrollbar-thumb {
-  @apply bg-pilot-navy-light rounded;
+  background-color: var(--color-border);
+  border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  @apply bg-pilot-navy;
+  background-color: var(--color-surface-elevated);
 }
