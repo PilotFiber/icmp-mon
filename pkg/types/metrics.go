@@ -66,11 +66,15 @@ type AgentFilter struct {
 	// Filter by provider (exact match, any of these)
 	Providers []string `json:"providers,omitempty"`
 
-	// Filter by tags (all must match)
+	// Filter by tags (all must match) - legacy simple format
 	Tags map[string]string `json:"tags,omitempty"`
 
-	// Exclude agents matching these tags
+	// Exclude agents matching these tags - legacy simple format
 	ExcludeTags map[string]string `json:"exclude_tags,omitempty"`
+
+	// Advanced tag filters with operators
+	// Filters with the same key are ORed, different keys are ANDed
+	TagFilters []TagFilter `json:"tag_filters,omitempty"`
 }
 
 // TargetFilter specifies which targets to include in the query.
@@ -81,11 +85,22 @@ type TargetFilter struct {
 	// Filter by tier (any of these)
 	Tiers []string `json:"tiers,omitempty"`
 
-	// Filter by tags (all must match)
+	// Filter by tags (all must match) - legacy simple format
 	Tags map[string]string `json:"tags,omitempty"`
 
-	// Exclude targets matching these tags
+	// Exclude targets matching these tags - legacy simple format
 	ExcludeTags map[string]string `json:"exclude_tags,omitempty"`
+
+	// Advanced tag filters with operators
+	// Filters with the same key are ORed, different keys are ANDed
+	TagFilters []TagFilter `json:"tag_filters,omitempty"`
+}
+
+// TagFilter defines a single tag filter with an operator.
+type TagFilter struct {
+	Key      string `json:"key"`
+	Operator string `json:"operator"` // equals, not_equals, contains, not_contains, starts_with, in, not_in, regex
+	Value    string `json:"value"`
 }
 
 // TimeRange specifies the time window for the query.

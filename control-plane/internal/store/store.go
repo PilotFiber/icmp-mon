@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -46,6 +47,11 @@ func (s *Store) Ping(ctx context.Context) error {
 	return s.pool.Ping(ctx)
 }
 
+// Pool returns the underlying connection pool for advanced operations.
+func (s *Store) Pool() *pgxpool.Pool {
+	return s.pool
+}
+
 // =============================================================================
 // AGENTS
 // =============================================================================
@@ -64,23 +70,24 @@ func (s *Store) CreateAgent(ctx context.Context, agent *types.Agent) error {
 	return err
 }
 
-// GetAgent retrieves an agent by ID.
+// GetAgent retrieves an agent by ID (includes archived agents for historical data display).
 func (s *Store) GetAgent(ctx context.Context, id string) (*types.Agent, error) {
 	var agent types.Agent
 	var tagsJSON []byte
 	err := s.pool.QueryRow(ctx, `
 		SELECT id, name, region, location, provider, tags, public_ip::text, executors, max_targets, version,
 			CASE
+				WHEN archived_at IS NOT NULL THEN 'offline'
 				WHEN last_heartbeat IS NULL OR last_heartbeat < NOW() - INTERVAL '60 seconds' THEN 'offline'
 				WHEN last_heartbeat < NOW() - INTERVAL '30 seconds' THEN 'degraded'
 				ELSE 'active'
 			END as status,
-			last_heartbeat, created_at
+			last_heartbeat, created_at, archived_at, archive_reason
 		FROM agents WHERE id = $1
 	`, id).Scan(
 		&agent.ID, &agent.Name, &agent.Region, &agent.Location, &agent.Provider,
 		&tagsJSON, &agent.PublicIP, &agent.Executors, &agent.MaxTargets, &agent.Version,
-		&agent.Status, &agent.LastHeartbeat, &agent.CreatedAt,
+		&agent.Status, &agent.LastHeartbeat, &agent.CreatedAt, &agent.ArchivedAt, &agent.ArchiveReason,
 	)
 	if err == pgx.ErrNoRows {
 		return nil, nil
@@ -92,23 +99,24 @@ func (s *Store) GetAgent(ctx context.Context, id string) (*types.Agent, error) {
 	return &agent, nil
 }
 
-// GetAgentByName retrieves an agent by name.
+// GetAgentByName retrieves an agent by name (includes archived agents for historical data display).
 func (s *Store) GetAgentByName(ctx context.Context, name string) (*types.Agent, error) {
 	var agent types.Agent
 	var tagsJSON []byte
 	err := s.pool.QueryRow(ctx, `
 		SELECT id, name, region, location, provider, tags, public_ip::text, executors, max_targets, version,
 			CASE
+				WHEN archived_at IS NOT NULL THEN 'offline'
 				WHEN last_heartbeat IS NULL OR last_heartbeat < NOW() - INTERVAL '60 seconds' THEN 'offline'
 				WHEN last_heartbeat < NOW() - INTERVAL '30 seconds' THEN 'degraded'
 				ELSE 'active'
 			END as status,
-			last_heartbeat, created_at
+			last_heartbeat, created_at, archived_at, archive_reason
 		FROM agents WHERE name = $1
 	`, name).Scan(
 		&agent.ID, &agent.Name, &agent.Region, &agent.Location, &agent.Provider,
 		&tagsJSON, &agent.PublicIP, &agent.Executors, &agent.MaxTargets, &agent.Version,
-		&agent.Status, &agent.LastHeartbeat, &agent.CreatedAt,
+		&agent.Status, &agent.LastHeartbeat, &agent.CreatedAt, &agent.ArchivedAt, &agent.ArchiveReason,
 	)
 	if err == pgx.ErrNoRows {
 		return nil, nil
@@ -120,17 +128,19 @@ func (s *Store) GetAgentByName(ctx context.Context, name string) (*types.Agent, 
 	return &agent, nil
 }
 
-// ListAgents returns all agents with status computed from heartbeat age.
+// ListAgents returns all agents (including archived) with status computed from heartbeat age.
+// Includes archived agents by default for historical data display.
 func (s *Store) ListAgents(ctx context.Context) ([]types.Agent, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, name, region, location, provider, tags, public_ip::text, executors, max_targets, version,
 			CASE
+				WHEN archived_at IS NOT NULL THEN 'offline'
 				WHEN last_heartbeat IS NULL OR last_heartbeat < NOW() - INTERVAL '60 seconds' THEN 'offline'
 				WHEN last_heartbeat < NOW() - INTERVAL '30 seconds' THEN 'degraded'
 				ELSE 'active'
 			END as status,
-			last_heartbeat, created_at
-		FROM agents ORDER BY name
+			last_heartbeat, created_at, archived_at, archive_reason
+		FROM agents ORDER BY archived_at NULLS FIRST, name
 	`)
 	if err != nil {
 		return nil, err
@@ -144,7 +154,7 @@ func (s *Store) ListAgents(ctx context.Context) ([]types.Agent, error) {
 		if err := rows.Scan(
 			&agent.ID, &agent.Name, &agent.Region, &agent.Location, &agent.Provider,
 			&tagsJSON, &agent.PublicIP, &agent.Executors, &agent.MaxTargets, &agent.Version,
-			&agent.Status, &agent.LastHeartbeat, &agent.CreatedAt,
+			&agent.Status, &agent.LastHeartbeat, &agent.CreatedAt, &agent.ArchivedAt, &agent.ArchiveReason,
 		); err != nil {
 			return nil, err
 		}
@@ -154,11 +164,12 @@ func (s *Store) ListAgents(ctx context.Context) ([]types.Agent, error) {
 	return agents, nil
 }
 
-// ListActiveAgents returns agents with active status.
+// ListActiveAgents returns agents with active status (excludes archived agents).
+// Used for operational queries where only live agents should be considered.
 func (s *Store) ListActiveAgents(ctx context.Context) ([]types.Agent, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, name, region, location, provider, tags, public_ip::text, executors, max_targets, version, status, last_heartbeat, created_at
-		FROM agents WHERE status = 'active' ORDER BY name
+		FROM agents WHERE status = 'active' AND archived_at IS NULL ORDER BY name
 	`)
 	if err != nil {
 		return nil, err
@@ -183,11 +194,46 @@ func (s *Store) ListActiveAgents(ctx context.Context) ([]types.Agent, error) {
 }
 
 // UpdateAgentHeartbeat updates the agent's last heartbeat time.
+// Only updates non-archived agents - archived agents ignore heartbeat updates.
 func (s *Store) UpdateAgentHeartbeat(ctx context.Context, agentID string, status types.AgentStatus) error {
 	_, err := s.pool.Exec(ctx, `
-		UPDATE agents SET last_heartbeat = NOW(), status = $2, updated_at = NOW() WHERE id = $1
+		UPDATE agents SET last_heartbeat = NOW(), status = $2, updated_at = NOW()
+		WHERE id = $1 AND archived_at IS NULL
 	`, agentID, status)
 	return err
+}
+
+// ArchiveAgent soft-deletes an agent by setting archived_at timestamp.
+// Archived agents are excluded from operational queries but included in read queries.
+func (s *Store) ArchiveAgent(ctx context.Context, agentID string, reason string) error {
+	result, err := s.pool.Exec(ctx, `
+		UPDATE agents
+		SET archived_at = NOW(), archive_reason = $2, updated_at = NOW()
+		WHERE id = $1 AND archived_at IS NULL
+	`, agentID, reason)
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("agent not found or already archived: %s", agentID)
+	}
+	return nil
+}
+
+// UnarchiveAgent restores an archived agent.
+func (s *Store) UnarchiveAgent(ctx context.Context, agentID string) error {
+	result, err := s.pool.Exec(ctx, `
+		UPDATE agents
+		SET archived_at = NULL, archive_reason = NULL, updated_at = NOW()
+		WHERE id = $1 AND archived_at IS NOT NULL
+	`, agentID)
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("agent not found or not archived: %s", agentID)
+	}
+	return nil
 }
 
 // UpdateAgent updates all fields of an existing agent.
@@ -213,6 +259,30 @@ func (s *Store) UpdateAgent(ctx context.Context, agent *types.Agent) error {
 	return err
 }
 
+// UpdateAgentInfo updates user-editable agent information (not heartbeat-related fields).
+func (s *Store) UpdateAgentInfo(ctx context.Context, agentID string, name, region, location, provider string, tags map[string]string, maxTargets int) error {
+	tagsJSON, _ := json.Marshal(tags)
+
+	result, err := s.pool.Exec(ctx, `
+		UPDATE agents SET
+			name = $2,
+			region = $3,
+			location = $4,
+			provider = $5,
+			tags = $6,
+			max_targets = $7,
+			updated_at = NOW()
+		WHERE id = $1
+	`, agentID, name, region, location, provider, tagsJSON, maxTargets)
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("agent not found: %s", agentID)
+	}
+	return nil
+}
+
 // RecordAgentMetrics stores agent health metrics.
 func (s *Store) RecordAgentMetrics(ctx context.Context, agentID string, heartbeat types.Heartbeat) error {
 	_, err := s.pool.Exec(ctx, `
@@ -227,6 +297,282 @@ func (s *Store) RecordAgentMetrics(ctx context.Context, agentID string, heartbea
 		heartbeat.AssignmentVersion,
 	)
 	return err
+}
+
+// AgentMetricsPoint represents a single time-series point of agent metrics.
+type AgentMetricsPoint struct {
+	Time            time.Time `json:"time"`
+	Status          string    `json:"status"`
+	CPUPercent      float64   `json:"cpu_percent"`
+	MemoryMB        float64   `json:"memory_mb"`
+	GoroutineCount  int       `json:"goroutine_count"`
+	ActiveTargets   int       `json:"active_targets"`
+	ProbesPerSecond float64   `json:"probes_per_second"`
+	ResultsQueued   int       `json:"results_queued"`
+	ResultsShipped  int64     `json:"results_shipped"`
+}
+
+// GetAgentMetrics returns time-series metrics for an agent within the given duration.
+func (s *Store) GetAgentMetrics(ctx context.Context, agentID string, duration time.Duration) ([]AgentMetricsPoint, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT time, status, cpu_percent, memory_mb, goroutine_count,
+			   active_targets, probes_per_second, results_queued, results_shipped
+		FROM agent_metrics
+		WHERE agent_id = $1 AND time > NOW() - $2::interval
+		ORDER BY time ASC
+	`, agentID, duration.String())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var points []AgentMetricsPoint
+	for rows.Next() {
+		var p AgentMetricsPoint
+		var cpu, memory, pps *float64
+		var goroutines, targets, queued *int
+		var shipped *int64
+		if err := rows.Scan(&p.Time, &p.Status, &cpu, &memory, &goroutines,
+			&targets, &pps, &queued, &shipped); err != nil {
+			return nil, err
+		}
+		if cpu != nil {
+			p.CPUPercent = *cpu
+		}
+		if memory != nil {
+			p.MemoryMB = *memory
+		}
+		if goroutines != nil {
+			p.GoroutineCount = *goroutines
+		}
+		if targets != nil {
+			p.ActiveTargets = *targets
+		}
+		if pps != nil {
+			p.ProbesPerSecond = *pps
+		}
+		if queued != nil {
+			p.ResultsQueued = *queued
+		}
+		if shipped != nil {
+			p.ResultsShipped = *shipped
+		}
+		points = append(points, p)
+	}
+	return points, rows.Err()
+}
+
+// AgentCurrentStats represents the current operational stats for an agent.
+type AgentCurrentStats struct {
+	AgentID         string    `json:"agent_id"`
+	LastMetricTime  time.Time `json:"last_metric_time"`
+	Status          string    `json:"status"`
+	CPUPercent      float64   `json:"cpu_percent"`
+	MemoryMB        float64   `json:"memory_mb"`
+	GoroutineCount  int       `json:"goroutine_count"`
+	ActiveTargets   int       `json:"active_targets"`
+	ProbesPerSecond float64   `json:"probes_per_second"`
+	ResultsQueued   int       `json:"results_queued"`
+	ResultsShipped  int64     `json:"results_shipped"`
+}
+
+// GetAgentCurrentStats returns the most recent metrics for an agent.
+func (s *Store) GetAgentCurrentStats(ctx context.Context, agentID string) (*AgentCurrentStats, error) {
+	var stats AgentCurrentStats
+	var cpu, memory, pps *float64
+	var goroutines, targets, queued *int
+	var shipped *int64
+
+	err := s.pool.QueryRow(ctx, `
+		SELECT agent_id, time, status, cpu_percent, memory_mb, goroutine_count,
+			   active_targets, probes_per_second, results_queued, results_shipped
+		FROM agent_metrics
+		WHERE agent_id = $1
+		ORDER BY time DESC
+		LIMIT 1
+	`, agentID).Scan(&stats.AgentID, &stats.LastMetricTime, &stats.Status,
+		&cpu, &memory, &goroutines, &targets, &pps, &queued, &shipped)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	if cpu != nil {
+		stats.CPUPercent = *cpu
+	}
+	if memory != nil {
+		stats.MemoryMB = *memory
+	}
+	if goroutines != nil {
+		stats.GoroutineCount = *goroutines
+	}
+	if targets != nil {
+		stats.ActiveTargets = *targets
+	}
+	if pps != nil {
+		stats.ProbesPerSecond = *pps
+	}
+	if queued != nil {
+		stats.ResultsQueued = *queued
+	}
+	if shipped != nil {
+		stats.ResultsShipped = *shipped
+	}
+	return &stats, nil
+}
+
+// FleetOverview contains aggregated stats for the entire fleet.
+type FleetOverview struct {
+	TotalAgents       int     `json:"total_agents"`
+	ActiveAgents      int     `json:"active_agents"`
+	DegradedAgents    int     `json:"degraded_agents"`
+	OfflineAgents     int     `json:"offline_agents"`
+	TotalTargets      int     `json:"total_targets"`
+	TotalActiveTargets int    `json:"total_active_targets"`
+	TotalProbesPerSec float64 `json:"total_probes_per_second"`
+	TotalResultsQueued int    `json:"total_results_queued"`
+	AvgCPUPercent     float64 `json:"avg_cpu_percent"`
+	AvgMemoryMB       float64 `json:"avg_memory_mb"`
+}
+
+// GetFleetOverview returns aggregated stats for all agents.
+func (s *Store) GetFleetOverview(ctx context.Context) (*FleetOverview, error) {
+	var overview FleetOverview
+
+	// Get agent counts by status
+	err := s.pool.QueryRow(ctx, `
+		SELECT
+			COUNT(*) as total,
+			COUNT(*) FILTER (WHERE
+				archived_at IS NULL AND
+				last_heartbeat IS NOT NULL AND
+				last_heartbeat > NOW() - INTERVAL '60 seconds') as active,
+			COUNT(*) FILTER (WHERE
+				archived_at IS NULL AND
+				last_heartbeat IS NOT NULL AND
+				last_heartbeat > NOW() - INTERVAL '120 seconds' AND
+				last_heartbeat <= NOW() - INTERVAL '60 seconds') as degraded,
+			COUNT(*) FILTER (WHERE
+				archived_at IS NULL AND
+				(last_heartbeat IS NULL OR last_heartbeat <= NOW() - INTERVAL '120 seconds')) as offline
+		FROM agents
+		WHERE archived_at IS NULL
+	`).Scan(&overview.TotalAgents, &overview.ActiveAgents, &overview.DegradedAgents, &overview.OfflineAgents)
+	if err != nil {
+		return nil, err
+	}
+
+	// Get target counts
+	err = s.pool.QueryRow(ctx, `
+		SELECT COUNT(*) FROM targets WHERE archived_at IS NULL
+	`).Scan(&overview.TotalTargets)
+	if err != nil {
+		return nil, err
+	}
+
+	// Get target counts with active monitoring state
+	err = s.pool.QueryRow(ctx, `
+		SELECT COUNT(*) FROM targets WHERE archived_at IS NULL AND monitoring_state = 'active'
+	`).Scan(&overview.TotalActiveTargets)
+	if err != nil {
+		return nil, err
+	}
+
+	// Get latest metrics aggregates from recent heartbeats
+	var avgCPU, avgMem, totalPPS *float64
+	var totalQueued *int
+	err = s.pool.QueryRow(ctx, `
+		WITH latest_per_agent AS (
+			SELECT DISTINCT ON (agent_id)
+				agent_id, cpu_percent, memory_mb, probes_per_second, results_queued
+			FROM agent_metrics
+			WHERE time > NOW() - INTERVAL '2 minutes'
+			ORDER BY agent_id, time DESC
+		)
+		SELECT
+			AVG(cpu_percent),
+			AVG(memory_mb),
+			SUM(probes_per_second),
+			SUM(results_queued)
+		FROM latest_per_agent
+	`).Scan(&avgCPU, &avgMem, &totalPPS, &totalQueued)
+	if err != nil && err != pgx.ErrNoRows {
+		return nil, err
+	}
+
+	if avgCPU != nil {
+		overview.AvgCPUPercent = *avgCPU
+	}
+	if avgMem != nil {
+		overview.AvgMemoryMB = *avgMem
+	}
+	if totalPPS != nil {
+		overview.TotalProbesPerSec = *totalPPS
+	}
+	if totalQueued != nil {
+		overview.TotalResultsQueued = *totalQueued
+	}
+
+	return &overview, nil
+}
+
+// GetAllAgentsCurrentStats returns current stats for all active agents.
+func (s *Store) GetAllAgentsCurrentStats(ctx context.Context) ([]AgentCurrentStats, error) {
+	rows, err := s.pool.Query(ctx, `
+		WITH latest_per_agent AS (
+			SELECT DISTINCT ON (agent_id)
+				agent_id, time, status, cpu_percent, memory_mb, goroutine_count,
+				active_targets, probes_per_second, results_queued, results_shipped
+			FROM agent_metrics
+			WHERE time > NOW() - INTERVAL '5 minutes'
+			ORDER BY agent_id, time DESC
+		)
+		SELECT agent_id, time, status, cpu_percent, memory_mb, goroutine_count,
+			   active_targets, probes_per_second, results_queued, results_shipped
+		FROM latest_per_agent
+		ORDER BY active_targets DESC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var statsList []AgentCurrentStats
+	for rows.Next() {
+		var stats AgentCurrentStats
+		var cpu, memory, pps *float64
+		var goroutines, targets, queued *int
+		var shipped *int64
+		if err := rows.Scan(&stats.AgentID, &stats.LastMetricTime, &stats.Status,
+			&cpu, &memory, &goroutines, &targets, &pps, &queued, &shipped); err != nil {
+			return nil, err
+		}
+		if cpu != nil {
+			stats.CPUPercent = *cpu
+		}
+		if memory != nil {
+			stats.MemoryMB = *memory
+		}
+		if goroutines != nil {
+			stats.GoroutineCount = *goroutines
+		}
+		if targets != nil {
+			stats.ActiveTargets = *targets
+		}
+		if pps != nil {
+			stats.ProbesPerSecond = *pps
+		}
+		if queued != nil {
+			stats.ResultsQueued = *queued
+		}
+		if shipped != nil {
+			stats.ResultsShipped = *shipped
+		}
+		statsList = append(statsList, stats)
+	}
+	return statsList, rows.Err()
 }
 
 // =============================================================================
@@ -331,6 +677,105 @@ func (s *Store) ListTargets(ctx context.Context) ([]types.Target, error) {
 	defer rows.Close()
 
 	return s.scanTargets(rows)
+}
+
+// TargetListParams contains parameters for paginated target listing.
+type TargetListParams struct {
+	Limit           int
+	Offset          int
+	Tier            string
+	MonitoringState string
+	Search          string // Searches IP address, display name
+	IncludeArchived bool
+}
+
+// TargetListResult contains paginated target results.
+type TargetListResult struct {
+	Targets    []types.Target `json:"targets"`
+	TotalCount int            `json:"total_count"`
+	Limit      int            `json:"limit"`
+	Offset     int            `json:"offset"`
+}
+
+// ListTargetsPaginated returns targets with pagination and filtering.
+func (s *Store) ListTargetsPaginated(ctx context.Context, params TargetListParams) (*TargetListResult, error) {
+	// Build WHERE clause
+	conditions := []string{}
+	args := []interface{}{}
+	argNum := 1
+
+	if !params.IncludeArchived {
+		conditions = append(conditions, "archived_at IS NULL")
+	}
+	if params.Tier != "" {
+		conditions = append(conditions, fmt.Sprintf("tier = $%d", argNum))
+		args = append(args, params.Tier)
+		argNum++
+	}
+	if params.MonitoringState != "" {
+		conditions = append(conditions, fmt.Sprintf("monitoring_state = $%d", argNum))
+		args = append(args, params.MonitoringState)
+		argNum++
+	}
+	if params.Search != "" {
+		conditions = append(conditions, fmt.Sprintf("(host(ip_address) ILIKE $%d OR display_name ILIKE $%d OR tags->>'description' ILIKE $%d)", argNum, argNum, argNum))
+		args = append(args, "%"+params.Search+"%")
+		argNum++
+	}
+
+	whereClause := "1=1"
+	if len(conditions) > 0 {
+		whereClause = strings.Join(conditions, " AND ")
+	}
+
+	// Get total count
+	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM targets WHERE %s", whereClause)
+	var totalCount int
+	if err := s.pool.QueryRow(ctx, countQuery, args...).Scan(&totalCount); err != nil {
+		return nil, fmt.Errorf("counting targets: %w", err)
+	}
+
+	// Set defaults
+	if params.Limit <= 0 {
+		params.Limit = 50
+	}
+	if params.Limit > 500 {
+		params.Limit = 500
+	}
+
+	// Build main query
+	query := fmt.Sprintf(`
+		SELECT
+			id, host(ip_address), tier, subscriber_id, tags, display_name, notes,
+			subnet_id, ownership, origin, ip_type,
+			monitoring_state, state_changed_at, needs_review, discovery_attempts, last_response_at,
+			first_response_at, baseline_established_at,
+			archived_at, archive_reason, expected_outcome, created_at, updated_at
+		FROM targets
+		WHERE %s
+		ORDER BY ip_address
+		LIMIT $%d OFFSET $%d
+	`, whereClause, argNum, argNum+1)
+
+	args = append(args, params.Limit, params.Offset)
+
+	rows, err := s.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	targets, err := s.scanTargets(rows)
+	if err != nil {
+		return nil, err
+	}
+
+	return &TargetListResult{
+		Targets:    targets,
+		TotalCount: totalCount,
+		Limit:      params.Limit,
+		Offset:     params.Offset,
+	}, nil
 }
 
 // ListTargetsByTier returns targets in a specific tier.
@@ -509,26 +954,45 @@ func (s *Store) DeleteTier(ctx context.Context, name string) error {
 // =============================================================================
 
 // InsertProbeResults inserts a batch of probe results.
+// Uses batch INSERT with ON CONFLICT DO NOTHING to handle duplicate timestamps gracefully.
 func (s *Store) InsertProbeResults(ctx context.Context, results []types.ProbeResult) error {
 	if len(results) == 0 {
 		return nil
 	}
 
-	// Use COPY for bulk insert (much faster)
-	rows := make([][]any, len(results))
-	for i, r := range results {
-		rows[i] = []any{
-			r.Timestamp, r.TargetID, r.AgentID, r.Success, r.Error,
-			getLatency(r.Payload), getPacketLoss(r.Payload), r.Payload,
+	// Build batch INSERT with ON CONFLICT DO NOTHING
+	// This handles the case where agents submit results with duplicate timestamps
+	const batchSize = 500
+	for i := 0; i < len(results); i += batchSize {
+		end := i + batchSize
+		if end > len(results) {
+			end = len(results)
+		}
+		batch := results[i:end]
+
+		// Build the query with placeholders
+		var query strings.Builder
+		query.WriteString(`INSERT INTO probe_results (time, target_id, agent_id, success, error_message, latency_ms, packet_loss_pct, payload) VALUES `)
+
+		args := make([]any, 0, len(batch)*8)
+		for j, r := range batch {
+			if j > 0 {
+				query.WriteString(", ")
+			}
+			base := j * 8
+			query.WriteString(fmt.Sprintf("($%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d)",
+				base+1, base+2, base+3, base+4, base+5, base+6, base+7, base+8))
+			args = append(args, r.Timestamp, r.TargetID, r.AgentID, r.Success, r.Error,
+				getLatency(r.Payload), getPacketLoss(r.Payload), r.Payload)
+		}
+		query.WriteString(" ON CONFLICT (time, target_id, agent_id) DO NOTHING")
+
+		_, err := s.pool.Exec(ctx, query.String(), args...)
+		if err != nil {
+			return fmt.Errorf("batch insert failed: %w", err)
 		}
 	}
-
-	_, err := s.pool.CopyFrom(ctx,
-		pgx.Identifier{"probe_results"},
-		[]string{"time", "target_id", "agent_id", "success", "error_message", "latency_ms", "packet_loss_pct", "payload"},
-		pgx.CopyFromRows(rows),
-	)
-	return err
+	return nil
 }
 
 // GetRecentResults returns recent probe results for a target.
@@ -617,6 +1081,7 @@ func (s *Store) GetTargetStatus(ctx context.Context, targetID string, window tim
 	status.TargetID = targetID
 	cutoffTime := time.Now().Add(-window)
 
+	var lastProbe *time.Time
 	err := s.pool.QueryRow(ctx, `
 		SELECT
 			host(t.ip_address),
@@ -637,7 +1102,7 @@ func (s *Store) GetTargetStatus(ctx context.Context, targetID string, window tim
 		&status.IP, &status.Tier,
 		&status.TotalAgents, &status.ReachableAgents,
 		&status.AvgLatencyMs, &status.MinLatencyMs, &status.MaxLatencyMs,
-		&status.PacketLossPct, &status.LastProbe, &status.ProbeCount,
+		&status.PacketLossPct, &lastProbe, &status.ProbeCount,
 	)
 	if err == pgx.ErrNoRows {
 		return nil, nil
@@ -646,8 +1111,12 @@ func (s *Store) GetTargetStatus(ctx context.Context, targetID string, window tim
 		return nil, err
 	}
 
-	// Determine status
-	status.Status = calculateStatus(status.ReachableAgents, status.TotalAgents, status.PacketLossPct)
+	if lastProbe != nil {
+		status.LastProbe = *lastProbe
+	}
+
+	// Determine status based on tier requirements
+	status.Status = calculateStatusWithTier(status.ReachableAgents, status.TotalAgents, status.Tier)
 	return &status, nil
 }
 
@@ -692,7 +1161,7 @@ func (s *Store) GetAllTargetStatuses(ctx context.Context, window time.Duration) 
 		if lastProbe != nil {
 			status.LastProbe = *lastProbe
 		}
-		status.Status = calculateStatus(status.ReachableAgents, status.TotalAgents, status.PacketLossPct)
+		status.Status = calculateStatusWithTier(status.ReachableAgents, status.TotalAgents, status.Tier)
 		statuses = append(statuses, status)
 	}
 	return statuses, nil
@@ -950,18 +1419,32 @@ func (s *Store) GetLatencyTrend(ctx context.Context, window time.Duration, bucke
 	return history, nil
 }
 
-// calculateStatus determines target status from metrics.
-func calculateStatus(reachable, total int, packetLoss *float64) string {
+// getMinAgentsForTier returns the minimum number of agents required for a target to be healthy.
+func getMinAgentsForTier(tier string, total int) int {
+	switch tier {
+	case "pilot_infra":
+		return total // All agents must report
+	case "vlan":
+		return min(3, total)
+	default: // customer and others
+		return min(2, total)
+	}
+}
+
+func calculateStatusWithTier(reachable, total int, tier string) string {
 	if total == 0 {
 		return "unknown"
 	}
-	if reachable == 0 {
-		return "down"
+	minRequired := getMinAgentsForTier(tier, total)
+	if reachable >= minRequired {
+		return "healthy"
 	}
-	if reachable < total || (packetLoss != nil && *packetLoss > 5) {
-		return "degraded"
-	}
-	return "healthy"
+	return "down"
+}
+
+// calculateStatus for backward compatibility
+func calculateStatus(reachable, total int, packetLoss *float64) string {
+	return calculateStatusWithTier(reachable, total, "")
 }
 
 // =============================================================================
@@ -1195,6 +1678,146 @@ func (s *Store) RecalculateAllBaselines(ctx context.Context) (int, error) {
 	return count, err
 }
 
+// UpsertBaseline inserts or updates the agent_target_baseline row.
+func (s *Store) UpsertBaseline(ctx context.Context, baseline *AgentTargetBaseline) error {
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO agent_target_baseline (
+			agent_id, target_id, latency_p50, latency_p95, latency_p99, latency_stddev,
+			packet_loss_baseline, sample_count, first_seen, last_updated
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		ON CONFLICT (agent_id, target_id) DO UPDATE SET
+			latency_p50 = EXCLUDED.latency_p50,
+			latency_p95 = EXCLUDED.latency_p95,
+			latency_p99 = EXCLUDED.latency_p99,
+			latency_stddev = EXCLUDED.latency_stddev,
+			packet_loss_baseline = EXCLUDED.packet_loss_baseline,
+			sample_count = EXCLUDED.sample_count,
+			last_updated = EXCLUDED.last_updated
+	`, baseline.AgentID, baseline.TargetID, baseline.LatencyP50, baseline.LatencyP95,
+		baseline.LatencyP99, baseline.LatencyStddev, baseline.PacketLossBaseline,
+		baseline.SampleCount, baseline.FirstSeen, baseline.LastUpdated)
+	return err
+}
+
+// =============================================================================
+// EVALUATOR WORKER SUPPORT
+// =============================================================================
+
+// AgentTargetPair represents an agent-target assignment for iteration.
+type AgentTargetPair struct {
+	AgentID  string
+	TargetID string
+}
+
+// ProbeStats represents aggregated probe statistics for evaluation.
+type ProbeStats struct {
+	AvgLatencyMs  float64
+	MinLatencyMs  float64
+	MaxLatencyMs  float64
+	P50LatencyMs  float64
+	P95LatencyMs  float64
+	StddevMs      float64
+	PacketLossPct float64
+	SuccessCount  int
+	FailureCount  int
+	TotalCount    int
+	LastProbeTime time.Time
+}
+
+// GetActiveAgentTargetPairs returns all (agent_id, target_id) pairs with recent probe results.
+// Excludes archived agents and targets from operational queries.
+func (s *Store) GetActiveAgentTargetPairs(ctx context.Context, since time.Duration) ([]AgentTargetPair, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT DISTINCT pr.agent_id, pr.target_id
+		FROM probe_results pr
+		JOIN agents a ON pr.agent_id = a.id
+		JOIN targets t ON pr.target_id = t.id
+		WHERE pr.time > NOW() - $1::interval
+		  AND a.archived_at IS NULL
+		  AND t.archived_at IS NULL
+	`, since.String())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var pairs []AgentTargetPair
+	for rows.Next() {
+		var p AgentTargetPair
+		if err := rows.Scan(&p.AgentID, &p.TargetID); err != nil {
+			return nil, err
+		}
+		pairs = append(pairs, p)
+	}
+	return pairs, rows.Err()
+}
+
+// GetRecentProbeStats returns aggregated probe statistics for an agent-target pair.
+func (s *Store) GetRecentProbeStats(ctx context.Context, agentID, targetID string, window time.Duration) (*ProbeStats, error) {
+	var stats ProbeStats
+	var lastProbeTime *time.Time
+	var avgLatency, minLatency, maxLatency, p50Latency, p95Latency, stddev *float64
+
+	err := s.pool.QueryRow(ctx, `
+		SELECT
+			avg(latency_ms) as avg_latency,
+			min(latency_ms) as min_latency,
+			max(latency_ms) as max_latency,
+			percentile_cont(0.5) WITHIN GROUP (ORDER BY latency_ms) as p50_latency,
+			percentile_cont(0.95) WITHIN GROUP (ORDER BY latency_ms) as p95_latency,
+			stddev(latency_ms) as stddev,
+			avg(packet_loss_pct) as packet_loss,
+			count(*) FILTER (WHERE success = true) as success_count,
+			count(*) FILTER (WHERE success = false) as failure_count,
+			count(*) as total_count,
+			max(time) as last_probe_time
+		FROM probe_results
+		WHERE agent_id = $1
+		  AND target_id = $2
+		  AND time > NOW() - $3::interval
+	`, agentID, targetID, window.String()).Scan(
+		&avgLatency, &minLatency, &maxLatency, &p50Latency, &p95Latency, &stddev,
+		&stats.PacketLossPct, &stats.SuccessCount, &stats.FailureCount, &stats.TotalCount,
+		&lastProbeTime,
+	)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	// Handle NULL values (happens when no successful probes)
+	if avgLatency != nil {
+		stats.AvgLatencyMs = *avgLatency
+	}
+	if minLatency != nil {
+		stats.MinLatencyMs = *minLatency
+	}
+	if maxLatency != nil {
+		stats.MaxLatencyMs = *maxLatency
+	}
+	if p50Latency != nil {
+		stats.P50LatencyMs = *p50Latency
+	}
+	if p95Latency != nil {
+		stats.P95LatencyMs = *p95Latency
+	}
+	if stddev != nil {
+		stats.StddevMs = *stddev
+	}
+	if lastProbeTime != nil {
+		stats.LastProbeTime = *lastProbeTime
+	}
+
+	// If total count is 0, return nil
+	if stats.TotalCount == 0 {
+		return nil, nil
+	}
+
+	return &stats, nil
+}
+
 // =============================================================================
 // AGENT-TARGET STATE
 // =============================================================================
@@ -1210,6 +1833,7 @@ type AgentTargetState struct {
 	CurrentLatencyMs     *float64   `json:"current_latency_ms"`
 	AnomalyStart         *time.Time `json:"anomaly_start"`
 	ConsecutiveAnomalies int        `json:"consecutive_anomalies"`
+	ConsecutiveSuccesses int        `json:"consecutive_successes"`
 	LastProbeTime        *time.Time `json:"last_probe_time"`
 	LastEvaluated        time.Time  `json:"last_evaluated"`
 }
@@ -1219,13 +1843,14 @@ func (s *Store) GetAgentTargetState(ctx context.Context, agentID, targetID strin
 	var state AgentTargetState
 	err := s.pool.QueryRow(ctx, `
 		SELECT agent_id, target_id, status, status_since, current_z_score, current_packet_loss,
-		       current_latency_ms, anomaly_start, consecutive_anomalies, last_probe_time, last_evaluated
+		       current_latency_ms, anomaly_start, consecutive_anomalies, consecutive_successes,
+		       last_probe_time, last_evaluated
 		FROM agent_target_state
 		WHERE agent_id = $1 AND target_id = $2
 	`, agentID, targetID).Scan(
 		&state.AgentID, &state.TargetID, &state.Status, &state.StatusSince, &state.CurrentZScore,
 		&state.CurrentPacketLoss, &state.CurrentLatencyMs, &state.AnomalyStart,
-		&state.ConsecutiveAnomalies, &state.LastProbeTime, &state.LastEvaluated,
+		&state.ConsecutiveAnomalies, &state.ConsecutiveSuccesses, &state.LastProbeTime, &state.LastEvaluated,
 	)
 	if err == pgx.ErrNoRows {
 		return nil, nil
@@ -1241,29 +1866,312 @@ func (s *Store) UpsertAgentTargetState(ctx context.Context, state *AgentTargetSt
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO agent_target_state (agent_id, target_id, status, status_since, current_z_score,
 		       current_packet_loss, current_latency_ms, anomaly_start, consecutive_anomalies,
-		       last_probe_time, last_evaluated)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
+		       consecutive_successes, last_probe_time, last_evaluated)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 		ON CONFLICT (agent_id, target_id) DO UPDATE SET
 			status = EXCLUDED.status,
-			status_since = CASE WHEN agent_target_state.status != EXCLUDED.status THEN NOW() ELSE agent_target_state.status_since END,
+			status_since = COALESCE(EXCLUDED.status_since, agent_target_state.status_since),
 			current_z_score = EXCLUDED.current_z_score,
 			current_packet_loss = EXCLUDED.current_packet_loss,
 			current_latency_ms = EXCLUDED.current_latency_ms,
 			anomaly_start = EXCLUDED.anomaly_start,
 			consecutive_anomalies = EXCLUDED.consecutive_anomalies,
+			consecutive_successes = EXCLUDED.consecutive_successes,
 			last_probe_time = EXCLUDED.last_probe_time,
-			last_evaluated = NOW()
+			last_evaluated = EXCLUDED.last_evaluated
 	`, state.AgentID, state.TargetID, state.Status, state.StatusSince, state.CurrentZScore,
 		state.CurrentPacketLoss, state.CurrentLatencyMs, state.AnomalyStart,
-		state.ConsecutiveAnomalies, state.LastProbeTime)
+		state.ConsecutiveAnomalies, state.ConsecutiveSuccesses, state.LastProbeTime, state.LastEvaluated)
 	return err
+}
+
+// BulkUpsertAgentTargetStates creates or updates multiple agent-target states in a single transaction.
+// Uses COPY + INSERT for high throughput.
+func (s *Store) BulkUpsertAgentTargetStates(ctx context.Context, states []*AgentTargetState) error {
+	if len(states) == 0 {
+		return nil
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	// Create temp table
+	_, err = tx.Exec(ctx, `
+		CREATE TEMP TABLE agent_target_state_staging (
+			agent_id UUID NOT NULL,
+			target_id UUID NOT NULL,
+			status TEXT NOT NULL,
+			status_since TIMESTAMPTZ,
+			current_z_score DOUBLE PRECISION,
+			current_packet_loss DOUBLE PRECISION,
+			current_latency_ms DOUBLE PRECISION,
+			anomaly_start TIMESTAMPTZ,
+			consecutive_anomalies INT NOT NULL DEFAULT 0,
+			consecutive_successes INT NOT NULL DEFAULT 0,
+			last_probe_time TIMESTAMPTZ,
+			last_evaluated TIMESTAMPTZ NOT NULL
+		) ON COMMIT DROP
+	`)
+	if err != nil {
+		return err
+	}
+
+	// COPY data into temp table
+	rows := make([][]any, len(states))
+	for i, s := range states {
+		rows[i] = []any{
+			s.AgentID, s.TargetID, s.Status, s.StatusSince, s.CurrentZScore,
+			s.CurrentPacketLoss, s.CurrentLatencyMs, s.AnomalyStart,
+			s.ConsecutiveAnomalies, s.ConsecutiveSuccesses, s.LastProbeTime, s.LastEvaluated,
+		}
+	}
+
+	_, err = tx.CopyFrom(ctx,
+		pgx.Identifier{"agent_target_state_staging"},
+		[]string{"agent_id", "target_id", "status", "status_since", "current_z_score",
+			"current_packet_loss", "current_latency_ms", "anomaly_start",
+			"consecutive_anomalies", "consecutive_successes", "last_probe_time", "last_evaluated"},
+		pgx.CopyFromRows(rows),
+	)
+	if err != nil {
+		return err
+	}
+
+	// INSERT from temp to permanent table with conflict handling
+	_, err = tx.Exec(ctx, `
+		INSERT INTO agent_target_state (agent_id, target_id, status, status_since, current_z_score,
+		       current_packet_loss, current_latency_ms, anomaly_start, consecutive_anomalies,
+		       consecutive_successes, last_probe_time, last_evaluated)
+		SELECT agent_id, target_id, status, status_since, current_z_score,
+		       current_packet_loss, current_latency_ms, anomaly_start, consecutive_anomalies,
+		       consecutive_successes, last_probe_time, last_evaluated
+		FROM agent_target_state_staging
+		ON CONFLICT (agent_id, target_id) DO UPDATE SET
+			status = EXCLUDED.status,
+			status_since = COALESCE(EXCLUDED.status_since, agent_target_state.status_since),
+			current_z_score = EXCLUDED.current_z_score,
+			current_packet_loss = EXCLUDED.current_packet_loss,
+			current_latency_ms = EXCLUDED.current_latency_ms,
+			anomaly_start = EXCLUDED.anomaly_start,
+			consecutive_anomalies = EXCLUDED.consecutive_anomalies,
+			consecutive_successes = EXCLUDED.consecutive_successes,
+			last_probe_time = EXCLUDED.last_probe_time,
+			last_evaluated = EXCLUDED.last_evaluated
+	`)
+	if err != nil {
+		return err
+	}
+
+	return tx.Commit(ctx)
+}
+
+// PairKey is a key for agent-target pair lookups.
+type PairKey struct {
+	AgentID  string
+	TargetID string
+}
+
+// BulkGetRecentProbeStats retrieves probe stats for multiple agent-target pairs in a single query.
+// Returns a map keyed by (agent_id, target_id) pair.
+func (s *Store) BulkGetRecentProbeStats(ctx context.Context, pairs []AgentTargetPair, window time.Duration) (map[PairKey]*ProbeStats, error) {
+	if len(pairs) == 0 {
+		return make(map[PairKey]*ProbeStats), nil
+	}
+
+	// Build VALUES clause for the pairs
+	values := make([]string, len(pairs))
+	args := make([]any, len(pairs)*2+1)
+	args[0] = window.String()
+	for i, p := range pairs {
+		values[i] = fmt.Sprintf("($%d::uuid, $%d::uuid)", i*2+2, i*2+3)
+		args[i*2+1] = p.AgentID
+		args[i*2+2] = p.TargetID
+	}
+
+	query := fmt.Sprintf(`
+		WITH pairs AS (
+			SELECT * FROM (VALUES %s) AS v(agent_id, target_id)
+		)
+		SELECT
+			p.agent_id,
+			p.target_id,
+			avg(pr.latency_ms) as avg_latency,
+			min(pr.latency_ms) as min_latency,
+			max(pr.latency_ms) as max_latency,
+			percentile_cont(0.5) WITHIN GROUP (ORDER BY pr.latency_ms) as p50_latency,
+			percentile_cont(0.95) WITHIN GROUP (ORDER BY pr.latency_ms) as p95_latency,
+			stddev(pr.latency_ms) as stddev,
+			avg(pr.packet_loss_pct) as packet_loss,
+			count(*) FILTER (WHERE pr.success = true) as success_count,
+			count(*) FILTER (WHERE pr.success = false) as failure_count,
+			count(*) as total_count,
+			max(pr.time) as last_probe_time
+		FROM pairs p
+		LEFT JOIN probe_results pr ON pr.agent_id = p.agent_id AND pr.target_id = p.target_id
+			AND pr.time > NOW() - $1::interval
+		GROUP BY p.agent_id, p.target_id
+	`, strings.Join(values, ", "))
+
+	rows, err := s.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make(map[PairKey]*ProbeStats)
+	for rows.Next() {
+		var agentID, targetID string
+		var avgLatency, minLatency, maxLatency, p50Latency, p95Latency, stddev, packetLoss *float64
+		var successCount, failureCount, totalCount *int
+		var lastProbeTime *time.Time
+
+		if err := rows.Scan(
+			&agentID, &targetID,
+			&avgLatency, &minLatency, &maxLatency, &p50Latency, &p95Latency, &stddev,
+			&packetLoss, &successCount, &failureCount, &totalCount,
+			&lastProbeTime,
+		); err != nil {
+			return nil, err
+		}
+
+		// Skip pairs with no data
+		if totalCount == nil || *totalCount == 0 {
+			continue
+		}
+
+		stats := &ProbeStats{
+			SuccessCount: *successCount,
+			FailureCount: *failureCount,
+			TotalCount:   *totalCount,
+		}
+		if avgLatency != nil {
+			stats.AvgLatencyMs = *avgLatency
+		}
+		if minLatency != nil {
+			stats.MinLatencyMs = *minLatency
+		}
+		if maxLatency != nil {
+			stats.MaxLatencyMs = *maxLatency
+		}
+		if p50Latency != nil {
+			stats.P50LatencyMs = *p50Latency
+		}
+		if p95Latency != nil {
+			stats.P95LatencyMs = *p95Latency
+		}
+		if stddev != nil {
+			stats.StddevMs = *stddev
+		}
+		if packetLoss != nil {
+			stats.PacketLossPct = *packetLoss
+		}
+		if lastProbeTime != nil {
+			stats.LastProbeTime = *lastProbeTime
+		}
+
+		result[PairKey{AgentID: agentID, TargetID: targetID}] = stats
+	}
+
+	return result, rows.Err()
+}
+
+// BulkGetBaselines retrieves baselines for multiple agent-target pairs in a single query.
+func (s *Store) BulkGetBaselines(ctx context.Context, pairs []AgentTargetPair) (map[PairKey]*AgentTargetBaseline, error) {
+	if len(pairs) == 0 {
+		return make(map[PairKey]*AgentTargetBaseline), nil
+	}
+
+	// Build VALUES clause for the pairs
+	values := make([]string, len(pairs))
+	args := make([]any, len(pairs)*2)
+	for i, p := range pairs {
+		values[i] = fmt.Sprintf("($%d::uuid, $%d::uuid)", i*2+1, i*2+2)
+		args[i*2] = p.AgentID
+		args[i*2+1] = p.TargetID
+	}
+
+	query := fmt.Sprintf(`
+		SELECT b.agent_id, b.target_id, b.latency_p50, b.latency_p95, b.latency_p99, b.latency_stddev,
+		       b.packet_loss_baseline, b.sample_count, b.first_seen, b.last_updated
+		FROM agent_target_baseline b
+		WHERE (b.agent_id, b.target_id) IN (SELECT * FROM (VALUES %s) AS v(agent_id, target_id))
+	`, strings.Join(values, ", "))
+
+	rows, err := s.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make(map[PairKey]*AgentTargetBaseline)
+	for rows.Next() {
+		var b AgentTargetBaseline
+		if err := rows.Scan(
+			&b.AgentID, &b.TargetID, &b.LatencyP50, &b.LatencyP95, &b.LatencyP99, &b.LatencyStddev,
+			&b.PacketLossBaseline, &b.SampleCount, &b.FirstSeen, &b.LastUpdated,
+		); err != nil {
+			return nil, err
+		}
+		result[PairKey{AgentID: b.AgentID, TargetID: b.TargetID}] = &b
+	}
+
+	return result, rows.Err()
+}
+
+// BulkGetAgentTargetStates retrieves states for multiple agent-target pairs in a single query.
+func (s *Store) BulkGetAgentTargetStates(ctx context.Context, pairs []AgentTargetPair) (map[PairKey]*AgentTargetState, error) {
+	if len(pairs) == 0 {
+		return make(map[PairKey]*AgentTargetState), nil
+	}
+
+	// Build VALUES clause for the pairs
+	values := make([]string, len(pairs))
+	args := make([]any, len(pairs)*2)
+	for i, p := range pairs {
+		values[i] = fmt.Sprintf("($%d::uuid, $%d::uuid)", i*2+1, i*2+2)
+		args[i*2] = p.AgentID
+		args[i*2+1] = p.TargetID
+	}
+
+	query := fmt.Sprintf(`
+		SELECT s.agent_id, s.target_id, s.status, s.status_since, s.current_z_score, s.current_packet_loss,
+		       s.current_latency_ms, s.anomaly_start, s.consecutive_anomalies, s.consecutive_successes,
+		       s.last_probe_time, s.last_evaluated
+		FROM agent_target_state s
+		WHERE (s.agent_id, s.target_id) IN (SELECT * FROM (VALUES %s) AS v(agent_id, target_id))
+	`, strings.Join(values, ", "))
+
+	rows, err := s.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make(map[PairKey]*AgentTargetState)
+	for rows.Next() {
+		var state AgentTargetState
+		if err := rows.Scan(
+			&state.AgentID, &state.TargetID, &state.Status, &state.StatusSince, &state.CurrentZScore,
+			&state.CurrentPacketLoss, &state.CurrentLatencyMs, &state.AnomalyStart,
+			&state.ConsecutiveAnomalies, &state.ConsecutiveSuccesses, &state.LastProbeTime, &state.LastEvaluated,
+		); err != nil {
+			return nil, err
+		}
+		result[PairKey{AgentID: state.AgentID, TargetID: state.TargetID}] = &state
+	}
+
+	return result, rows.Err()
 }
 
 // GetAnomalousStates returns all agent-target pairs currently in anomaly.
 func (s *Store) GetAnomalousStates(ctx context.Context) ([]AgentTargetState, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT agent_id, target_id, status, status_since, current_z_score, current_packet_loss,
-		       current_latency_ms, anomaly_start, consecutive_anomalies, last_probe_time, last_evaluated
+		       current_latency_ms, anomaly_start, consecutive_anomalies, consecutive_successes,
+		       last_probe_time, last_evaluated
 		FROM agent_target_state
 		WHERE anomaly_start IS NOT NULL
 		ORDER BY anomaly_start ASC
@@ -1279,7 +2187,7 @@ func (s *Store) GetAnomalousStates(ctx context.Context) ([]AgentTargetState, err
 		if err := rows.Scan(
 			&state.AgentID, &state.TargetID, &state.Status, &state.StatusSince, &state.CurrentZScore,
 			&state.CurrentPacketLoss, &state.CurrentLatencyMs, &state.AnomalyStart,
-			&state.ConsecutiveAnomalies, &state.LastProbeTime, &state.LastEvaluated,
+			&state.ConsecutiveAnomalies, &state.ConsecutiveSuccesses, &state.LastProbeTime, &state.LastEvaluated,
 		); err != nil {
 			return nil, err
 		}
@@ -1385,10 +2293,10 @@ func (s *Store) CreateIncident(ctx context.Context, incident *Incident) error {
 func (s *Store) GetIncident(ctx context.Context, id string) (*Incident, error) {
 	var inc Incident
 	err := s.pool.QueryRow(ctx, `
-		SELECT id, incident_type, severity, primary_entity_type, primary_entity_id,
+		SELECT id, incident_type, severity, COALESCE(primary_entity_type, ''), COALESCE(primary_entity_id, ''),
 		       affected_target_ids, affected_agent_ids, detected_at, confirmed_at, resolved_at,
 		       peak_z_score, peak_packet_loss, peak_latency_ms, baseline_snapshot,
-		       acknowledged_by, acknowledged_at, notes, status, created_at, updated_at
+		       COALESCE(acknowledged_by, ''), acknowledged_at, COALESCE(notes, ''), status, created_at, updated_at
 		FROM incidents WHERE id = $1
 	`, id).Scan(
 		&inc.ID, &inc.IncidentType, &inc.Severity, &inc.PrimaryEntityType, &inc.PrimaryEntityID,
@@ -1408,10 +2316,10 @@ func (s *Store) GetIncident(ctx context.Context, id string) (*Incident, error) {
 // ListIncidents returns incidents filtered by status.
 func (s *Store) ListIncidents(ctx context.Context, status string, limit int) ([]Incident, error) {
 	query := `
-		SELECT id, incident_type, severity, primary_entity_type, primary_entity_id,
+		SELECT id, incident_type, severity, COALESCE(primary_entity_type, ''), COALESCE(primary_entity_id, ''),
 		       affected_target_ids, affected_agent_ids, detected_at, confirmed_at, resolved_at,
 		       peak_z_score, peak_packet_loss, peak_latency_ms, baseline_snapshot,
-		       acknowledged_by, acknowledged_at, notes, status, created_at, updated_at
+		       COALESCE(acknowledged_by, ''), acknowledged_at, COALESCE(notes, ''), status, created_at, updated_at
 		FROM incidents
 	`
 	var args []any
@@ -1455,10 +2363,10 @@ func (s *Store) ListIncidents(ctx context.Context, status string, limit int) ([]
 // GetActiveIncidents returns all non-resolved incidents.
 func (s *Store) GetActiveIncidents(ctx context.Context) ([]Incident, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, incident_type, severity, primary_entity_type, primary_entity_id,
+		SELECT id, incident_type, severity, COALESCE(primary_entity_type, ''), COALESCE(primary_entity_id, ''),
 		       affected_target_ids, affected_agent_ids, detected_at, confirmed_at, resolved_at,
 		       peak_z_score, peak_packet_loss, peak_latency_ms, baseline_snapshot,
-		       acknowledged_by, acknowledged_at, notes, status, created_at, updated_at
+		       COALESCE(acknowledged_by, ''), acknowledged_at, COALESCE(notes, ''), status, created_at, updated_at
 		FROM incidents
 		WHERE status NOT IN ('resolved')
 		ORDER BY severity DESC, detected_at ASC
@@ -1807,6 +2715,16 @@ func buildAgentFilterCTE(filter *types.AgentFilter, startIdx int) (string, []any
 		idx++
 	}
 
+	// Advanced tag filters with operators
+	if len(filter.TagFilters) > 0 {
+		tagCond, tagArgs, newIdx := buildTagFiltersCondition(filter.TagFilters, idx)
+		if tagCond != "" {
+			conditions = append(conditions, tagCond)
+			args = append(args, tagArgs...)
+			idx = newIdx
+		}
+	}
+
 	if len(conditions) == 0 {
 		return "SELECT id FROM agents LIMIT 1000", args, idx
 	}
@@ -1840,7 +2758,7 @@ func buildTargetFilterCTE(filter *types.TargetFilter, startIdx int) (string, []a
 		idx++
 	}
 
-	// Filter by tags (all must match)
+	// Filter by tags (all must match) - legacy simple format
 	if len(filter.Tags) > 0 {
 		tagsJSON, _ := json.Marshal(filter.Tags)
 		conditions = append(conditions, fmt.Sprintf("tags @> $%d", idx))
@@ -1848,12 +2766,23 @@ func buildTargetFilterCTE(filter *types.TargetFilter, startIdx int) (string, []a
 		idx++
 	}
 
-	// Exclude by tags
+	// Exclude by tags - legacy simple format
 	if len(filter.ExcludeTags) > 0 {
 		tagsJSON, _ := json.Marshal(filter.ExcludeTags)
 		conditions = append(conditions, fmt.Sprintf("NOT tags @> $%d", idx))
 		args = append(args, tagsJSON)
 		idx++
+	}
+
+	// Advanced tag filters with operators
+	// Group filters by key (same key = OR, different keys = AND)
+	if len(filter.TagFilters) > 0 {
+		tagCondition, tagArgs, nextIdx := buildTagFiltersCondition(filter.TagFilters, idx)
+		if tagCondition != "" {
+			conditions = append(conditions, tagCondition)
+			args = append(args, tagArgs...)
+			idx = nextIdx
+		}
 	}
 
 	if len(conditions) == 0 {
@@ -1863,6 +2792,127 @@ func buildTargetFilterCTE(filter *types.TargetFilter, startIdx int) (string, []a
 	sql := fmt.Sprintf("SELECT id FROM targets WHERE %s LIMIT 10000",
 		joinConditions(conditions, " AND "))
 	return sql, args, idx
+}
+
+// buildTagFiltersCondition creates SQL conditions for advanced tag filters.
+// Filters with the same key are ORed, different keys are ANDed.
+func buildTagFiltersCondition(filters []types.TagFilter, startIdx int) (string, []any, int) {
+	if len(filters) == 0 {
+		return "", nil, startIdx
+	}
+
+	args := []any{}
+	idx := startIdx
+
+	// Group filters by key
+	keyGroups := make(map[string][]types.TagFilter)
+	for _, f := range filters {
+		keyGroups[f.Key] = append(keyGroups[f.Key], f)
+	}
+
+	// Build conditions for each key group (ORed within group)
+	keyConditions := []string{}
+	for key, keyFilters := range keyGroups {
+		orConditions := []string{}
+		for _, f := range keyFilters {
+			cond, condArgs, nextIdx := buildSingleTagFilterCondition(key, f.Operator, f.Value, idx)
+			if cond != "" {
+				orConditions = append(orConditions, cond)
+				args = append(args, condArgs...)
+				idx = nextIdx
+			}
+		}
+		if len(orConditions) > 0 {
+			if len(orConditions) == 1 {
+				keyConditions = append(keyConditions, orConditions[0])
+			} else {
+				keyConditions = append(keyConditions, "("+joinConditions(orConditions, " OR ")+")")
+			}
+		}
+	}
+
+	if len(keyConditions) == 0 {
+		return "", nil, idx
+	}
+
+	// AND all key groups together
+	return joinConditions(keyConditions, " AND "), args, idx
+}
+
+// buildSingleTagFilterCondition creates a SQL condition for a single tag filter.
+func buildSingleTagFilterCondition(key, operator, value string, idx int) (string, []any, int) {
+	args := []any{}
+
+	// Use ->> operator to extract JSON value as text
+	jsonPath := fmt.Sprintf("tags->>'%s'", key) // Safe because key comes from our UI
+
+	switch operator {
+	case "equals", "":
+		// Exact match
+		args = append(args, value)
+		return fmt.Sprintf("%s = $%d", jsonPath, idx), args, idx + 1
+
+	case "not_equals":
+		// Not equal (handle NULL case - missing key)
+		args = append(args, value)
+		return fmt.Sprintf("(%s IS NULL OR %s != $%d)", jsonPath, jsonPath, idx), args, idx + 1
+
+	case "contains":
+		// Substring match (case insensitive)
+		args = append(args, "%"+value+"%")
+		return fmt.Sprintf("%s ILIKE $%d", jsonPath, idx), args, idx + 1
+
+	case "not_contains":
+		// Not substring match (handle NULL case)
+		args = append(args, "%"+value+"%")
+		return fmt.Sprintf("(%s IS NULL OR %s NOT ILIKE $%d)", jsonPath, jsonPath, idx), args, idx + 1
+
+	case "starts_with":
+		// Prefix match
+		args = append(args, value+"%")
+		return fmt.Sprintf("%s ILIKE $%d", jsonPath, idx), args, idx + 1
+
+	case "in":
+		// Value in comma-separated list
+		values := splitAndTrim(value)
+		if len(values) == 0 {
+			return "", nil, idx
+		}
+		args = append(args, values)
+		return fmt.Sprintf("%s = ANY($%d)", jsonPath, idx), args, idx + 1
+
+	case "not_in":
+		// Value not in comma-separated list (handle NULL case)
+		values := splitAndTrim(value)
+		if len(values) == 0 {
+			return "", nil, idx
+		}
+		args = append(args, values)
+		return fmt.Sprintf("(%s IS NULL OR NOT %s = ANY($%d))", jsonPath, jsonPath, idx), args, idx + 1
+
+	case "regex":
+		// Regex match (PostgreSQL ~ operator)
+		args = append(args, value)
+		return fmt.Sprintf("%s ~ $%d", jsonPath, idx), args, idx + 1
+
+	default:
+		// Unknown operator, treat as equals
+		args = append(args, value)
+		return fmt.Sprintf("%s = $%d", jsonPath, idx), args, idx + 1
+	}
+}
+
+// splitAndTrim splits a comma-separated string and trims whitespace from each part.
+func splitAndTrim(s string) []string {
+	parts := strings.Split(s, ",")
+	result := make([]string, 0, len(parts))
+	for _, p := range parts {
+		trimmed := strings.TrimSpace(p)
+		if trimmed != "" {
+			result = append(result, trimmed)
+		}
+	}
+	return result
 }
 
 // buildMetricsSelectClause creates SELECT columns for requested metrics.

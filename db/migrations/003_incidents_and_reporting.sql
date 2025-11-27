@@ -173,6 +173,7 @@ CREATE TABLE agent_target_state (
     -- Anomaly tracking
     anomaly_start TIMESTAMPTZ,  -- NULL if currently healthy
     consecutive_anomalies INTEGER DEFAULT 0,
+    consecutive_successes INTEGER DEFAULT 0,  -- For auto-resolution tracking
 
     last_probe_time TIMESTAMPTZ,
     last_evaluated TIMESTAMPTZ DEFAULT NOW(),

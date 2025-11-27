@@ -52,44 +52,197 @@ import (
 )
 
 // =============================================================================
-// ALERT
+// ALERT (Evolving)
 // =============================================================================
 
-// Alert represents a detected issue requiring attention.
+// Alert represents a detected issue that evolves over time.
+// Alerts track individual anomalies from detection through resolution,
+// recording severity changes, metric evolution, and eventually linking to incidents.
 type Alert struct {
 	ID        string    `json:"id"`
 	CreatedAt time.Time `json:"created_at"`
 
+	// What's affected
+	TargetID string `json:"target_id"`
+	TargetIP string `json:"target_ip"`
+	AgentID  string `json:"agent_id,omitempty"` // Which agent detected (empty if consensus)
+
 	// Classification
-	Severity  AlertSeverity `json:"severity"`
 	AlertType AlertType     `json:"alert_type"`
+	Severity  AlertSeverity `json:"severity"`
 	Status    AlertStatus   `json:"status"`
 
-	// Context
-	TargetID   string            `json:"target_id"`
-	TargetIP   string            `json:"target_ip"`
-	TargetTier string            `json:"target_tier"`
-	TargetTags map[string]string `json:"target_tags,omitempty"`
+	// Evolution tracking - how the alert changed over time
+	InitialSeverity AlertSeverity `json:"initial_severity"`
+	PeakSeverity    AlertSeverity `json:"peak_severity"`
 
-	// What triggered the alert
-	ProbeType string `json:"probe_type"`
-	AgentID   string `json:"agent_id,omitempty"`   // Single agent, if applicable
-	AgentIDs  []string `json:"agent_ids,omitempty"` // Multiple agents, for consensus
+	// Metrics at various points in the alert lifecycle
+	InitialLatencyMs   *float64 `json:"initial_latency_ms,omitempty"`
+	InitialPacketLoss  *float64 `json:"initial_packet_loss,omitempty"`
+	PeakLatencyMs      *float64 `json:"peak_latency_ms,omitempty"`
+	PeakPacketLoss     *float64 `json:"peak_packet_loss,omitempty"`
+	CurrentLatencyMs   *float64 `json:"current_latency_ms,omitempty"`
+	CurrentPacketLoss  *float64 `json:"current_packet_loss,omitempty"`
 
 	// Human-readable info
 	Title   string `json:"title"`
-	Message string `json:"message"`
+	Message string `json:"message,omitempty"`
 
-	// Machine-readable details
-	Details map[string]any `json:"details,omitempty"`
-
-	// Lifecycle
+	// Timeline
+	DetectedAt     time.Time  `json:"detected_at"`
+	LastUpdatedAt  time.Time  `json:"last_updated_at"`
 	AcknowledgedAt *time.Time `json:"acknowledged_at,omitempty"`
 	AcknowledgedBy string     `json:"acknowledged_by,omitempty"`
 	ResolvedAt     *time.Time `json:"resolved_at,omitempty"`
 
-	// For correlation
-	RelatedAlerts []string `json:"related_alerts,omitempty"`
+	// Correlation to incidents
+	IncidentID     *string `json:"incident_id,omitempty"`
+	CorrelationKey string  `json:"correlation_key,omitempty"` // e.g., "subnet:xxx", "target:xxx"
+
+	// For API responses - populated by joins
+	TargetName string `json:"target_name,omitempty"`
+	AgentName  string `json:"agent_name,omitempty"`
+
+	// Subnet/Pilot enriched metadata - for correlated alerting
+	SubnetID         string `json:"subnet_id,omitempty"`
+	SubscriberName   string `json:"subscriber_name,omitempty"`
+	ServiceID        int    `json:"service_id,omitempty"`
+	LocationID       int    `json:"location_id,omitempty"`
+	LocationAddress  string `json:"location_address,omitempty"`
+	City             string `json:"city,omitempty"`
+	Region           string `json:"region,omitempty"`
+	PopName          string `json:"pop_name,omitempty"`
+	GatewayDevice    string `json:"gateway_device,omitempty"`
+
+	// Legacy fields for backward compatibility with routing rules
+	TargetTier string            `json:"target_tier,omitempty"`
+	TargetTags map[string]string `json:"target_tags,omitempty"`
+	ProbeType  string            `json:"probe_type,omitempty"`
+	AgentIDs   []string          `json:"agent_ids,omitempty"` // For consensus alerts
+	Details    map[string]any    `json:"details,omitempty"`
+}
+
+// AlertEvent represents a single change in an alert's history.
+// Events are append-only and form the complete audit trail.
+type AlertEvent struct {
+	ID      int64     `json:"id"`
+	AlertID string    `json:"alert_id"`
+	EventType string  `json:"event_type"`
+	// Event types:
+	//   "created"            - Alert first detected
+	//   "escalated"          - Severity increased
+	//   "de_escalated"       - Severity decreased
+	//   "acknowledged"       - Human acknowledged
+	//   "unacknowledged"     - Acknowledgment reverted
+	//   "linked_to_incident" - Alert joined an incident
+	//   "metrics_updated"    - Current metrics changed significantly
+	//   "resolved"           - Alert resolved
+	//   "reopened"           - Alert reopened after resolution
+
+	// What changed
+	OldSeverity *AlertSeverity `json:"old_severity,omitempty"`
+	NewSeverity *AlertSeverity `json:"new_severity,omitempty"`
+	OldStatus   *AlertStatus   `json:"old_status,omitempty"`
+	NewStatus   *AlertStatus   `json:"new_status,omitempty"`
+
+	// Metrics at time of event
+	LatencyMs   *float64 `json:"latency_ms,omitempty"`
+	PacketLoss  *float64 `json:"packet_loss,omitempty"`
+
+	// Context
+	Description string         `json:"description,omitempty"`
+	Details     map[string]any `json:"details,omitempty"`
+	TriggeredBy string         `json:"triggered_by"` // "system", "alert_worker", "user:xxx"
+
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// AlertWithEvents combines an alert with its event history.
+type AlertWithEvents struct {
+	Alert
+	Events []AlertEvent `json:"events"`
+}
+
+// Anomaly represents a detected issue from agent_target_state.
+// Used as input to the AlertWorker for creating/evolving alerts.
+type Anomaly struct {
+	TargetID            string  `json:"target_id"`
+	TargetIP            string  `json:"target_ip"`
+	AgentID             string  `json:"agent_id"`
+	AnomalyType         string  `json:"anomaly_type"` // "availability", "latency", "packet_loss"
+	Severity            string  `json:"severity"`     // "info", "warning", "critical"
+	LatencyMs           float64 `json:"latency_ms"`
+	PacketLoss          float64 `json:"packet_loss"`
+	ZScore              float64 `json:"z_score"`
+	SubnetID            string  `json:"subnet_id,omitempty"`
+	ConsecutiveFailures int     `json:"consecutive_failures"`
+}
+
+// AlertFilter for listing alerts with filtering.
+type AlertFilter struct {
+	Status       *AlertStatus   `json:"status,omitempty"`
+	Severity     *AlertSeverity `json:"severity,omitempty"`
+	AlertType    *AlertType     `json:"alert_type,omitempty"`
+	TargetID     *string        `json:"target_id,omitempty"`
+	IncidentID   *string        `json:"incident_id,omitempty"`
+	HasIncident  *bool          `json:"has_incident,omitempty"` // true = linked, false = unlinked
+	Since        *time.Time     `json:"since,omitempty"`
+	Limit        int            `json:"limit,omitempty"`
+	Offset       int            `json:"offset,omitempty"`
+}
+
+// AlertStats provides aggregate statistics about alerts.
+type AlertStats struct {
+	ActiveCount            int      `json:"active_count"`
+	CriticalCount          int      `json:"critical_count"`
+	WarningCount           int      `json:"warning_count"`
+	AcknowledgedCount      int      `json:"acknowledged_count"`
+	ResolvedTodayCount     int      `json:"resolved_today_count"`
+	TotalThisWeekCount     int      `json:"total_this_week_count"`
+	AvgResolutionMinutes   *float64 `json:"avg_resolution_minutes,omitempty"`
+}
+
+// AlertConfig represents a configuration value from alert_config table.
+type AlertConfig struct {
+	Key         string    `json:"key"`
+	Value       any       `json:"value"`
+	Description string    `json:"description,omitempty"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+// AlertCorrelation represents a common pattern across active alerts.
+// Used to surface "hot spots" in the alert dashboard.
+type AlertCorrelation struct {
+	Key         string `json:"key"`           // e.g., "pop_name", "subscriber_name", "gateway_device"
+	Value       string `json:"value"`         // e.g., "jfk00", "Family Management"
+	AlertCount  int    `json:"alert_count"`   // Number of active alerts matching
+	TargetCount int    `json:"target_count"`  // Unique targets affected
+	AgentCount  int    `json:"agent_count"`   // Unique agents seeing issues
+	Severity    string `json:"severity"`      // Most severe alert in this group
+}
+
+// AlertCorrelationSummary aggregates correlations by dimension.
+type AlertCorrelationSummary struct {
+	TotalActiveAlerts int                `json:"total_active_alerts"`
+	ByPop             []AlertCorrelation `json:"by_pop"`
+	ByGateway         []AlertCorrelation `json:"by_gateway"`
+	BySubscriber      []AlertCorrelation `json:"by_subscriber"`
+	ByLocation        []AlertCorrelation `json:"by_location"`
+	ByRegion          []AlertCorrelation `json:"by_region"`
+}
+
+// SeverityLevel returns numeric level for comparison (higher = more severe).
+func (s AlertSeverity) Level() int {
+	switch s {
+	case AlertSeverityCritical:
+		return 3
+	case AlertSeverityWarning:
+		return 2
+	case AlertSeverityInfo:
+		return 1
+	default:
+		return 0
+	}
 }
 
 // AlertSeverity indicates urgency level.

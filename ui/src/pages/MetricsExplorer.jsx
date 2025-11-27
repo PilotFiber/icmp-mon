@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import {
   BarChart3,
   Play,
@@ -13,6 +13,8 @@ import {
   Download,
   Info,
   TrendingUp,
+  ChevronDown,
+  Check,
 } from 'lucide-react';
 import {
   LineChart,
@@ -76,7 +78,289 @@ const GROUP_BY_OPTIONS = [
   { value: 'agent', label: 'By Individual Agent' },
 ];
 
-// Tag input component
+// Filter operators for tag filtering
+const TAG_OPERATORS = [
+  { value: 'equals', label: '=' },
+  { value: 'not_equals', label: '≠' },
+  { value: 'in', label: 'in' },
+  { value: 'not_in', label: 'not in' },
+  { value: 'contains', label: 'contains' },
+  { value: 'not_contains', label: '!contains' },
+  { value: 'starts_with', label: 'starts with' },
+  { value: 'regex', label: 'regex' },
+];
+
+// Multi-select dropdown component
+function MultiSelectDropdown({ label, options, selected, onChange, placeholder = 'Select...' }) {
+  const [isOpen, setIsOpen] = useState(false);
+  const dropdownRef = useRef(null);
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
+        setIsOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const toggleOption = (value) => {
+    if (selected.includes(value)) {
+      onChange(selected.filter((v) => v !== value));
+    } else {
+      onChange([...selected, value]);
+    }
+  };
+
+  const selectedLabels = selected
+    .map((v) => options.find((o) => o.value === v)?.label || v)
+    .join(', ');
+
+  return (
+    <div className="space-y-1.5">
+      {label && (
+        <label className="block text-sm font-medium text-theme-secondary">{label}</label>
+      )}
+      <div className="relative" ref={dropdownRef}>
+        <button
+          type="button"
+          onClick={() => setIsOpen(!isOpen)}
+          className="w-full px-3 py-2 bg-surface-tertiary border border-theme rounded-lg text-left flex items-center justify-between focus:outline-none focus:ring-2 focus:ring-pilot-cyan"
+        >
+          <span className={`truncate ${selected.length === 0 ? 'text-theme-muted' : 'text-theme-primary'}`}>
+            {selected.length === 0 ? placeholder : selectedLabels}
+          </span>
+          <ChevronDown className={`w-4 h-4 text-theme-muted transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+        </button>
+
+        {isOpen && (
+          <div className="absolute z-50 w-full mt-1 bg-surface-secondary border border-theme rounded-lg shadow-lg max-h-60 overflow-auto">
+            {options.map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                onClick={() => toggleOption(option.value)}
+                className="w-full px-3 py-2 text-left text-sm hover:bg-surface-tertiary flex items-center justify-between"
+              >
+                <span className="text-theme-primary">{option.label}</span>
+                {selected.includes(option.value) && (
+                  <Check className="w-4 h-4 text-pilot-cyan" />
+                )}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+      {/* Selected chips below dropdown */}
+      {selected.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {selected.map((value) => {
+            const option = options.find((o) => o.value === value);
+            return (
+              <span
+                key={value}
+                className="inline-flex items-center gap-1 px-2 py-0.5 bg-pilot-yellow/20 text-pilot-yellow rounded text-xs"
+              >
+                {option?.label || value}
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    toggleOption(value);
+                  }}
+                  className="hover:text-white"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              </span>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Searchable dropdown for tag keys with text input fallback
+function SearchableKeyDropdown({ value, onChange, options, loading, placeholder = 'Select or type key...' }) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [search, setSearch] = useState(value);
+  const dropdownRef = useRef(null);
+  const inputRef = useRef(null);
+
+  useEffect(() => {
+    setSearch(value);
+  }, [value]);
+
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
+        setIsOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const filteredOptions = options.filter((opt) =>
+    opt.toLowerCase().includes(search.toLowerCase())
+  );
+
+  const handleInputChange = (e) => {
+    const newValue = e.target.value;
+    setSearch(newValue);
+    onChange(newValue);
+    if (!isOpen) setIsOpen(true);
+  };
+
+  const selectOption = (opt) => {
+    setSearch(opt);
+    onChange(opt);
+    setIsOpen(false);
+  };
+
+  return (
+    <div className="relative" ref={dropdownRef}>
+      <div className="relative">
+        <input
+          ref={inputRef}
+          type="text"
+          value={search}
+          onChange={handleInputChange}
+          onFocus={() => setIsOpen(true)}
+          placeholder={loading ? 'Loading...' : placeholder}
+          disabled={loading}
+          className="w-full px-2 py-1.5 pr-7 bg-surface-tertiary border border-theme rounded-lg text-theme-primary text-sm placeholder-theme-muted focus:outline-none focus:ring-2 focus:ring-pilot-cyan disabled:opacity-50"
+        />
+        <button
+          type="button"
+          onClick={() => setIsOpen(!isOpen)}
+          className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 text-theme-muted hover:text-theme-primary"
+        >
+          <ChevronDown className={`w-4 h-4 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+        </button>
+      </div>
+
+      {isOpen && filteredOptions.length > 0 && (
+        <div className="absolute z-50 w-full mt-1 bg-surface-secondary border border-theme rounded-lg shadow-lg max-h-48 overflow-auto">
+          {filteredOptions.map((opt) => (
+            <button
+              key={opt}
+              type="button"
+              onClick={() => selectOption(opt)}
+              className={`w-full px-3 py-1.5 text-left text-sm hover:bg-surface-tertiary ${
+                opt === value ? 'bg-surface-tertiary text-pilot-cyan' : 'text-theme-primary'
+              }`}
+            >
+              {opt}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Tag filter input component with searchable dropdown for keys and operator selection
+function TagFilterInput({ label, filters, onChange, availableKeys, loading }) {
+  const [selectedKey, setSelectedKey] = useState('');
+  const [operator, setOperator] = useState('equals');
+  const [value, setValue] = useState('');
+
+  const addFilter = () => {
+    if (selectedKey && value) {
+      onChange([...filters, { key: selectedKey, operator, value }]);
+      setSelectedKey('');
+      setValue('');
+    }
+  };
+
+  const removeFilter = (index) => {
+    onChange(filters.filter((_, i) => i !== index));
+  };
+
+  const getOperatorLabel = (op) => {
+    return TAG_OPERATORS.find((o) => o.value === op)?.label || op;
+  };
+
+  return (
+    <div className="space-y-2">
+      <label className="block text-sm font-medium text-theme-secondary">{label}</label>
+      <div className="flex flex-col gap-2">
+        {/* Row 1: Key dropdown and operator */}
+        <div className="flex gap-2">
+          <div className="flex-1 min-w-0">
+            <SearchableKeyDropdown
+              value={selectedKey}
+              onChange={setSelectedKey}
+              options={availableKeys}
+              loading={loading}
+              placeholder="Select or type key..."
+            />
+          </div>
+          <select
+            value={operator}
+            onChange={(e) => setOperator(e.target.value)}
+            className="w-auto px-2 py-1.5 bg-surface-tertiary border border-theme rounded-lg text-theme-primary text-sm focus:outline-none focus:ring-2 focus:ring-pilot-cyan"
+          >
+            {TAG_OPERATORS.map((op) => (
+              <option key={op.value} value={op.value}>
+                {op.label}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {/* Row 2: Value input and add button */}
+        <div className="flex gap-2">
+          <input
+            type="text"
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            placeholder={operator === 'in' || operator === 'not_in' ? 'val1, val2, val3' : 'value'}
+            className="flex-1 min-w-0 px-2 py-1.5 bg-surface-tertiary border border-theme rounded-lg text-theme-primary text-sm placeholder-theme-muted focus:outline-none focus:ring-2 focus:ring-pilot-cyan"
+            onKeyDown={(e) => e.key === 'Enter' && addFilter()}
+          />
+          <button
+            onClick={addFilter}
+            disabled={!selectedKey || !value}
+            className="px-3 py-1.5 bg-pilot-cyan text-neutral-900 rounded-lg text-sm font-medium hover:bg-pilot-cyan/80 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+          >
+            <Plus className="w-4 h-4" />
+            Add
+          </button>
+        </div>
+      </div>
+
+      {/* Active filters */}
+      {filters.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 mt-2">
+          {filters.map((f, idx) => (
+            <span
+              key={idx}
+              className="inline-flex items-center gap-1 px-2 py-1 bg-surface-tertiary rounded text-xs text-theme-secondary max-w-full"
+            >
+              <span className="text-pilot-cyan truncate">{f.key}</span>
+              <span className="text-theme-muted">{getOperatorLabel(f.operator)}</span>
+              <span className="truncate">{f.value}</span>
+              <button onClick={() => removeFilter(idx)} className="ml-1 hover:text-theme-primary flex-shrink-0">
+                <X className="w-3 h-3" />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+
+      {/* Helper text for operators */}
+      {(operator === 'in' || operator === 'not_in') && (
+        <p className="text-xs text-theme-muted">Use comma-separated values for multiple matches</p>
+      )}
+    </div>
+  );
+}
+
+// Legacy tag input component (for agent tags which don't have predefined keys)
 function TagInput({ label, tags, onChange }) {
   const [inputValue, setInputValue] = useState('');
   const [inputKey, setInputKey] = useState('');
@@ -143,35 +427,16 @@ function TagInput({ label, tags, onChange }) {
   );
 }
 
-// Multi-select for metrics
+// Multi-select for metrics using dropdown
 function MetricSelector({ selected, onChange }) {
-  const toggleMetric = (metric) => {
-    if (selected.includes(metric)) {
-      onChange(selected.filter((m) => m !== metric));
-    } else {
-      onChange([...selected, metric]);
-    }
-  };
-
   return (
-    <div className="space-y-2">
-      <label className="block text-sm font-medium text-theme-secondary">Metrics</label>
-      <div className="flex flex-wrap gap-2">
-        {METRIC_OPTIONS.map((option) => (
-          <button
-            key={option.value}
-            onClick={() => toggleMetric(option.value)}
-            className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
-              selected.includes(option.value)
-                ? 'bg-pilot-yellow text-neutral-900'
-                : 'bg-surface-tertiary text-theme-secondary hover:text-theme-primary'
-            }`}
-          >
-            {option.label}
-          </button>
-        ))}
-      </div>
-    </div>
+    <MultiSelectDropdown
+      label="Metrics"
+      options={METRIC_OPTIONS}
+      selected={selected}
+      onChange={onChange}
+      placeholder="Select metrics..."
+    />
   );
 }
 
@@ -229,16 +494,18 @@ export function MetricsExplorer() {
   // Agent filter state
   const [agentRegions, setAgentRegions] = useState([]);
   const [agentProviders, setAgentProviders] = useState([]);
-  const [agentTags, setAgentTags] = useState({});
+  const [agentTagFilters, setAgentTagFilters] = useState([]); // Array of {key, operator, value}
 
   // Target filter state
   const [targetTiers, setTargetTiers] = useState([]);
-  const [targetTags, setTargetTags] = useState({});
+  const [targetTagFilters, setTargetTagFilters] = useState([]); // Array of {key, operator, value}
 
   // Available options (from API)
   const [availableRegions, setAvailableRegions] = useState([]);
   const [availableProviders, setAvailableProviders] = useState([]);
   const [availableTiers, setAvailableTiers] = useState([]);
+  const [availableTargetTagKeys, setAvailableTargetTagKeys] = useState([]);
+  const [availableAgentTagKeys, setAvailableAgentTagKeys] = useState([]);
   const [optionsLoading, setOptionsLoading] = useState(true);
 
   // Results state
@@ -251,22 +518,31 @@ export function MetricsExplorer() {
     const fetchOptions = async () => {
       try {
         setOptionsLoading(true);
-        const [agentsRes, tiersRes] = await Promise.all([
+        const [agentsRes, tiersRes, targetTagKeysRes] = await Promise.all([
           endpoints.listAgents(),
           endpoints.listTiers(),
+          endpoints.getTargetTagKeys().catch(() => ({ keys: [] })), // Fallback if endpoint unavailable
         ]);
 
         const agents = agentsRes.agents || [];
         const tiers = tiersRes.tiers || [];
+        const targetTagKeys = targetTagKeysRes.keys || [];
 
         // Extract unique regions and providers
         const regions = [...new Set(agents.map((a) => a.region).filter(Boolean))];
         const providers = [...new Set(agents.map((a) => a.provider).filter(Boolean))];
         const tierNames = tiers.map((t) => t.name);
 
+        // Extract unique tag keys from agents
+        const agentTagKeys = [...new Set(
+          agents.flatMap((a) => Object.keys(a.tags || {}))
+        )].sort();
+
         setAvailableRegions(regions);
         setAvailableProviders(providers);
         setAvailableTiers(tierNames);
+        setAvailableTargetTagKeys(targetTagKeys);
+        setAvailableAgentTagKeys(agentTagKeys);
       } catch (err) {
         console.error('Failed to fetch options:', err);
       } finally {
@@ -286,18 +562,18 @@ export function MetricsExplorer() {
     };
 
     // Add agent filter if any filters are set
-    if (agentRegions.length > 0 || agentProviders.length > 0 || Object.keys(agentTags).length > 0) {
+    if (agentRegions.length > 0 || agentProviders.length > 0 || agentTagFilters.length > 0) {
       query.agent_filter = {};
       if (agentRegions.length > 0) query.agent_filter.regions = agentRegions;
       if (agentProviders.length > 0) query.agent_filter.providers = agentProviders;
-      if (Object.keys(agentTags).length > 0) query.agent_filter.tags = agentTags;
+      if (agentTagFilters.length > 0) query.agent_filter.tag_filters = agentTagFilters;
     }
 
     // Add target filter if any filters are set
-    if (targetTiers.length > 0 || Object.keys(targetTags).length > 0) {
+    if (targetTiers.length > 0 || targetTagFilters.length > 0) {
       query.target_filter = {};
       if (targetTiers.length > 0) query.target_filter.tiers = targetTiers;
-      if (Object.keys(targetTags).length > 0) query.target_filter.tags = targetTags;
+      if (targetTagFilters.length > 0) query.target_filter.tag_filters = targetTagFilters;
     }
 
     return query;
@@ -401,14 +677,14 @@ export function MetricsExplorer() {
   const clearFilters = () => {
     setAgentRegions([]);
     setAgentProviders([]);
-    setAgentTags({});
+    setAgentTagFilters([]);
     setTargetTiers([]);
-    setTargetTags({});
+    setTargetTagFilters([]);
   };
 
   const hasFilters = agentRegions.length > 0 || agentProviders.length > 0 ||
-    Object.keys(agentTags).length > 0 || targetTiers.length > 0 ||
-    Object.keys(targetTags).length > 0;
+    agentTagFilters.length > 0 || targetTiers.length > 0 ||
+    targetTagFilters.length > 0;
 
   return (
     <>
@@ -493,10 +769,12 @@ export function MetricsExplorer() {
                   loading={optionsLoading}
                 />
 
-                <TagInput
-                  label="Custom Tags"
-                  tags={agentTags}
-                  onChange={setAgentTags}
+                <TagFilterInput
+                  label="Tag Filters"
+                  filters={agentTagFilters}
+                  onChange={setAgentTagFilters}
+                  availableKeys={availableAgentTagKeys}
+                  loading={optionsLoading}
                 />
               </CardContent>
             </Card>
@@ -516,10 +794,12 @@ export function MetricsExplorer() {
                   loading={optionsLoading}
                 />
 
-                <TagInput
-                  label="Custom Tags"
-                  tags={targetTags}
-                  onChange={setTargetTags}
+                <TagFilterInput
+                  label="Tag Filters"
+                  filters={targetTagFilters}
+                  onChange={setTargetTagFilters}
+                  availableKeys={availableTargetTagKeys}
+                  loading={optionsLoading}
                 />
               </CardContent>
             </Card>

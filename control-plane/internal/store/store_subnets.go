@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -239,6 +240,152 @@ func (s *Store) listSubnetsWithFilter(ctx context.Context, where string, args []
 		subnets = append(subnets, subnet)
 	}
 	return subnets, rows.Err()
+}
+
+// SubnetListParams contains parameters for paginated subnet listing.
+type SubnetListParams struct {
+	Limit           int
+	Offset          int
+	POPName         string
+	City            string
+	Region          string
+	SubscriberID    *int
+	Search          string // Searches network address, subscriber name, location
+	IncludeArchived bool
+}
+
+// SubnetListResult contains paginated subnet results.
+type SubnetListResult struct {
+	Subnets    []types.Subnet `json:"subnets"`
+	TotalCount int            `json:"total_count"`
+	Limit      int            `json:"limit"`
+	Offset     int            `json:"offset"`
+}
+
+// ListSubnetsPaginated returns subnets with pagination and filtering.
+func (s *Store) ListSubnetsPaginated(ctx context.Context, params SubnetListParams) (*SubnetListResult, error) {
+	// Build WHERE clause
+	conditions := []string{}
+	args := []interface{}{}
+	argNum := 1
+
+	if !params.IncludeArchived {
+		conditions = append(conditions, "state = 'active'")
+	}
+	if params.POPName != "" {
+		conditions = append(conditions, fmt.Sprintf("pop_name = $%d", argNum))
+		args = append(args, params.POPName)
+		argNum++
+	}
+	if params.City != "" {
+		conditions = append(conditions, fmt.Sprintf("city = $%d", argNum))
+		args = append(args, params.City)
+		argNum++
+	}
+	if params.Region != "" {
+		conditions = append(conditions, fmt.Sprintf("region = $%d", argNum))
+		args = append(args, params.Region)
+		argNum++
+	}
+	if params.SubscriberID != nil {
+		conditions = append(conditions, fmt.Sprintf("subscriber_id = $%d", argNum))
+		args = append(args, *params.SubscriberID)
+		argNum++
+	}
+	if params.Search != "" {
+		conditions = append(conditions, fmt.Sprintf(
+			"(network_address::text ILIKE $%d OR subscriber_name ILIKE $%d OR location_address ILIKE $%d OR city ILIKE $%d)",
+			argNum, argNum, argNum, argNum,
+		))
+		args = append(args, "%"+params.Search+"%")
+		argNum++
+	}
+
+	whereClause := "1=1"
+	if len(conditions) > 0 {
+		whereClause = strings.Join(conditions, " AND ")
+	}
+
+	// Get total count
+	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM subnets WHERE %s", whereClause)
+	var totalCount int
+	if err := s.pool.QueryRow(ctx, countQuery, args...).Scan(&totalCount); err != nil {
+		return nil, fmt.Errorf("counting subnets: %w", err)
+	}
+
+	// Set defaults
+	if params.Limit <= 0 {
+		params.Limit = 50
+	}
+	if params.Limit > 500 {
+		params.Limit = 500
+	}
+
+	// Build main query
+	query := fmt.Sprintf(`
+		SELECT
+			id, pilot_subnet_id, network_address::text, network_size,
+			host(gateway_address), host(first_usable_address), host(last_usable_address),
+			vlan_id, service_id, subscriber_id, subscriber_name,
+			location_id, location_address, city, region, pop_name,
+			gateway_device, state, archived_at, archive_reason,
+			created_at, updated_at
+		FROM subnets
+		WHERE %s
+		ORDER BY network_address
+		LIMIT $%d OFFSET $%d
+	`, whereClause, argNum, argNum+1)
+
+	args = append(args, params.Limit, params.Offset)
+
+	rows, err := s.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var subnets []types.Subnet
+	for rows.Next() {
+		var subnet types.Subnet
+		if err := rows.Scan(
+			&subnet.ID,
+			&subnet.PilotSubnetID,
+			&subnet.NetworkAddress,
+			&subnet.NetworkSize,
+			&subnet.GatewayAddress,
+			&subnet.FirstUsableAddress,
+			&subnet.LastUsableAddress,
+			&subnet.VLANID,
+			&subnet.ServiceID,
+			&subnet.SubscriberID,
+			&subnet.SubscriberName,
+			&subnet.LocationID,
+			&subnet.LocationAddress,
+			&subnet.City,
+			&subnet.Region,
+			&subnet.POPName,
+			&subnet.GatewayDevice,
+			&subnet.State,
+			&subnet.ArchivedAt,
+			&subnet.ArchiveReason,
+			&subnet.CreatedAt,
+			&subnet.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		subnets = append(subnets, subnet)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return &SubnetListResult{
+		Subnets:    subnets,
+		TotalCount: totalCount,
+		Limit:      params.Limit,
+		Offset:     params.Offset,
+	}, nil
 }
 
 // UpdateSubnet updates a subnet's metadata.
@@ -913,6 +1060,49 @@ func (s *Store) UpdateTarget(ctx context.Context, target *types.Target) error {
 		expectedOutcomeJSON,
 	)
 	return err
+}
+
+// UpdateTargetTagsBySubnet updates tags on all active targets in a subnet.
+// Used when subnet metadata changes to keep target tags in sync.
+func (s *Store) UpdateTargetTagsBySubnet(ctx context.Context, subnetID string, tags map[string]string) error {
+	tagsJSON, err := json.Marshal(tags)
+	if err != nil {
+		return err
+	}
+	_, err = s.pool.Exec(ctx, `
+		UPDATE targets SET
+			tags = $2,
+			updated_at = NOW()
+		WHERE subnet_id = $1 AND archived_at IS NULL
+	`, subnetID, tagsJSON)
+	return err
+}
+
+// GetDistinctTargetTagKeys returns all unique tag keys from active targets.
+func (s *Store) GetDistinctTargetTagKeys(ctx context.Context) ([]string, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT DISTINCT jsonb_object_keys(tags) as key
+		FROM targets
+		WHERE archived_at IS NULL
+		  AND tags IS NOT NULL
+		  AND jsonb_typeof(tags) = 'object'
+		  AND tags != '{}'::jsonb
+		ORDER BY key
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var keys []string
+	for rows.Next() {
+		var key string
+		if err := rows.Scan(&key); err != nil {
+			return nil, err
+		}
+		keys = append(keys, key)
+	}
+	return keys, rows.Err()
 }
 
 // ArchiveTarget soft-deletes a target with a reason.

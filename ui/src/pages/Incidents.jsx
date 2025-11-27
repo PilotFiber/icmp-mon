@@ -1,10 +1,11 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   AlertCircle,
   AlertTriangle,
   Clock,
   RefreshCw,
   ChevronRight,
+  ChevronDown,
   CheckCircle,
   XCircle,
   MessageSquare,
@@ -13,6 +14,8 @@ import {
   Target,
   Activity,
   Filter,
+  Bell,
+  Loader2,
 } from 'lucide-react';
 
 import { PageHeader, PageContent } from '../components/Layout';
@@ -25,6 +28,8 @@ import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '.
 import { formatRelativeTime } from '../lib/utils';
 import { endpoints } from '../lib/api';
 
+const API_BASE = '/api/v1';
+
 const statusOptions = [
   { value: '', label: 'All Statuses' },
   { value: 'active', label: 'Active' },
@@ -35,31 +40,31 @@ const statusOptions = [
 const severityOptions = [
   { value: '', label: 'All Severities' },
   { value: 'critical', label: 'Critical' },
-  { value: 'major', label: 'Major' },
-  { value: 'minor', label: 'Minor' },
-  { value: 'warning', label: 'Warning' },
+  { value: 'high', label: 'High' },
+  { value: 'medium', label: 'Medium' },
+  { value: 'low', label: 'Low' },
 ];
 
 const typeOptions = [
   { value: '', label: 'All Types' },
-  { value: 'target_down', label: 'Target Down' },
-  { value: 'latency_spike', label: 'Latency Spike' },
-  { value: 'packet_loss', label: 'Packet Loss' },
-  { value: 'agent_down', label: 'Agent Down' },
+  { value: 'target', label: 'Target' },
+  { value: 'agent', label: 'Agent' },
+  { value: 'regional', label: 'Regional' },
+  { value: 'global', label: 'Global' },
 ];
 
 const severityColors = {
   critical: 'text-pilot-red',
-  major: 'text-warning',
-  minor: 'text-accent',
-  warning: 'text-theme-muted',
+  high: 'text-warning',
+  medium: 'text-pilot-yellow',
+  low: 'text-theme-muted',
 };
 
 const severityBgColors = {
   critical: 'bg-pilot-red/20',
-  major: 'bg-warning/20',
-  minor: 'bg-pilot-yellow/20',
-  warning: 'bg-gray-500/20',
+  high: 'bg-warning/20',
+  medium: 'bg-pilot-yellow/20',
+  low: 'bg-gray-500/20',
 };
 
 export function Incidents() {
@@ -73,6 +78,9 @@ export function Incidents() {
   const [selectedIncident, setSelectedIncident] = useState(null);
   const [actionLoading, setActionLoading] = useState(false);
   const [newNote, setNewNote] = useState('');
+  const [incidentAlerts, setIncidentAlerts] = useState([]);
+  const [alertsLoading, setAlertsLoading] = useState(false);
+  const [alertsExpanded, setAlertsExpanded] = useState(true);
 
   const fetchIncidents = async () => {
     try {
@@ -97,6 +105,27 @@ export function Incidents() {
     }
   };
 
+  const fetchIncidentAlerts = useCallback(async (incidentId) => {
+    if (!incidentId) {
+      setIncidentAlerts([]);
+      return;
+    }
+    setAlertsLoading(true);
+    try {
+      const response = await fetch(`${API_BASE}/alerts?incident_id=${incidentId}&limit=50`);
+      if (!response.ok) {
+        throw new Error('Failed to fetch alerts');
+      }
+      const data = await response.json();
+      setIncidentAlerts(data.alerts || []);
+    } catch (err) {
+      console.error('Failed to fetch incident alerts:', err);
+      setIncidentAlerts([]);
+    } finally {
+      setAlertsLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     fetchIncidents();
     const interval = setInterval(fetchIncidents, 15000);
@@ -106,8 +135,11 @@ export function Incidents() {
   useEffect(() => {
     if (selectedIncident?.id) {
       fetchIncidentDetails(selectedIncident.id);
+      fetchIncidentAlerts(selectedIncident.id);
+    } else {
+      setIncidentAlerts([]);
     }
-  }, []);
+  }, [selectedIncident?.id, fetchIncidentAlerts]);
 
   const handleAcknowledge = async (incident) => {
     setActionLoading(true);
@@ -169,10 +201,11 @@ export function Incidents() {
       if (typeFilter && incident.incident_type !== typeFilter) return false;
       if (search) {
         const searchLower = search.toLowerCase();
-        const matchesIP = incident.target_ip?.toLowerCase().includes(searchLower);
-        const matchesAgent = incident.agent_name?.toLowerCase().includes(searchLower);
-        const matchesTitle = incident.title?.toLowerCase().includes(searchLower);
-        if (!matchesIP && !matchesAgent && !matchesTitle) return false;
+        const matchesId = incident.id?.toLowerCase().includes(searchLower);
+        const matchesType = incident.incident_type?.toLowerCase().includes(searchLower);
+        const matchesSeverity = incident.severity?.toLowerCase().includes(searchLower);
+        const matchesNotes = incident.notes?.toLowerCase().includes(searchLower);
+        if (!matchesId && !matchesType && !matchesSeverity && !matchesNotes) return false;
       }
       return true;
     });
@@ -181,12 +214,22 @@ export function Incidents() {
   const getIncidentTitle = (incident) => {
     if (incident.title) return incident.title;
     const typeLabels = {
+      target: 'Target Issue',
+      agent: 'Agent Issue',
+      regional: 'Regional Outage',
+      global: 'Global Outage',
       target_down: 'Target Unreachable',
       latency_spike: 'Latency Anomaly',
       packet_loss: 'Packet Loss Detected',
       agent_down: 'Agent Offline',
     };
-    return typeLabels[incident.incident_type] || incident.incident_type;
+    const targetCount = incident.affected_target_ids?.length || 0;
+    const agentCount = incident.affected_agent_ids?.length || 0;
+    const baseTitle = typeLabels[incident.incident_type] || incident.incident_type;
+    if (targetCount > 0 && agentCount > 0) {
+      return `${baseTitle} (${targetCount} targets, ${agentCount} agents)`;
+    }
+    return baseTitle;
   };
 
   const getBlastRadiusIcon = (blastRadius) => {
@@ -284,7 +327,7 @@ export function Incidents() {
             <SearchInput
               value={search}
               onChange={setSearch}
-              placeholder="Search IP, agent, or title..."
+              placeholder="Search by ID, type, or notes..."
               className="w-72"
             />
             <Select
@@ -355,24 +398,27 @@ export function Incidents() {
                             />
                           </div>
                           <div className="flex items-center gap-4 text-sm text-theme-muted">
-                            {incident.target_ip && (
-                              <span className="font-mono">{incident.target_ip}</span>
-                            )}
-                            {incident.agent_name && (
-                              <span className="flex items-center gap-1">
-                                <Server className="w-3 h-3" />
-                                {incident.agent_name}
-                              </span>
-                            )}
                             <span className="flex items-center gap-1">
-                              {getBlastRadiusIcon(incident.blast_radius)}
-                              {getBlastRadiusLabel(incident.blast_radius)}
+                              <Target className="w-3 h-3" />
+                              {incident.affected_target_ids?.length || 0} targets
+                            </span>
+                            <span className="flex items-center gap-1">
+                              <Server className="w-3 h-3" />
+                              {incident.affected_agent_ids?.length || 0} agents
+                            </span>
+                            <span className={`px-1.5 py-0.5 rounded text-xs ${
+                              incident.severity === 'critical' ? 'bg-pilot-red/20 text-pilot-red' :
+                              incident.severity === 'high' ? 'bg-warning/20 text-warning' :
+                              incident.severity === 'medium' ? 'bg-pilot-yellow/20 text-pilot-yellow' :
+                              'bg-gray-500/20 text-theme-muted'
+                            }`}>
+                              {incident.severity}
                             </span>
                           </div>
                           <div className="flex items-center gap-4 mt-2 text-xs text-theme-muted">
                             <span className="flex items-center gap-1">
                               <Clock className="w-3 h-3" />
-                              Started {formatRelativeTime(incident.started_at)}
+                              Detected {formatRelativeTime(incident.detected_at)}
                             </span>
                             {incident.acknowledged_at && (
                               <span className="flex items-center gap-1">
@@ -397,7 +443,7 @@ export function Incidents() {
               <Card
                 accent={
                   selectedIncident.severity === 'critical' ? 'red' :
-                  selectedIncident.severity === 'major' ? 'warning' :
+                  selectedIncident.severity === 'high' ? 'warning' :
                   'cyan'
                 }
               >
@@ -419,29 +465,28 @@ export function Incidents() {
 
                 {/* Incident Details */}
                 <div className="space-y-3 mb-6">
-                  {selectedIncident.target_ip && (
-                    <div className="flex items-center justify-between">
-                      <span className="text-theme-muted text-sm">Target</span>
-                      <span className="font-mono text-theme-primary">{selectedIncident.target_ip}</span>
-                    </div>
-                  )}
-                  {selectedIncident.agent_name && (
-                    <div className="flex items-center justify-between">
-                      <span className="text-theme-muted text-sm">Agent</span>
-                      <span className="text-theme-primary">{selectedIncident.agent_name}</span>
-                    </div>
-                  )}
                   <div className="flex items-center justify-between">
-                    <span className="text-theme-muted text-sm">Blast Radius</span>
-                    <span className="flex items-center gap-1 text-theme-primary">
-                      {getBlastRadiusIcon(selectedIncident.blast_radius)}
-                      {getBlastRadiusLabel(selectedIncident.blast_radius)}
-                    </span>
+                    <span className="text-theme-muted text-sm">Type</span>
+                    <span className="text-theme-primary capitalize">{selectedIncident.incident_type}</span>
                   </div>
                   <div className="flex items-center justify-between">
-                    <span className="text-theme-muted text-sm">Started</span>
-                    <span className="text-theme-primary">{new Date(selectedIncident.started_at).toLocaleString()}</span>
+                    <span className="text-theme-muted text-sm">Affected Targets</span>
+                    <span className="text-theme-primary">{selectedIncident.affected_target_ids?.length || 0}</span>
                   </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-theme-muted text-sm">Affected Agents</span>
+                    <span className="text-theme-primary">{selectedIncident.affected_agent_ids?.length || 0}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-theme-muted text-sm">Detected</span>
+                    <span className="text-theme-primary">{new Date(selectedIncident.detected_at).toLocaleString()}</span>
+                  </div>
+                  {selectedIncident.confirmed_at && (
+                    <div className="flex items-center justify-between">
+                      <span className="text-theme-muted text-sm">Confirmed</span>
+                      <span className="text-theme-primary">{new Date(selectedIncident.confirmed_at).toLocaleString()}</span>
+                    </div>
+                  )}
                   {selectedIncident.resolved_at && (
                     <div className="flex items-center justify-between">
                       <span className="text-theme-muted text-sm">Resolved</span>
@@ -455,6 +500,18 @@ export function Incidents() {
                         <User className="w-3 h-3" />
                         {selectedIncident.acknowledged_by}
                       </span>
+                    </div>
+                  )}
+                  {selectedIncident.peak_packet_loss != null && (
+                    <div className="flex items-center justify-between">
+                      <span className="text-theme-muted text-sm">Peak Packet Loss</span>
+                      <span className="text-theme-primary">{selectedIncident.peak_packet_loss.toFixed(1)}%</span>
+                    </div>
+                  )}
+                  {selectedIncident.peak_latency_ms != null && (
+                    <div className="flex items-center justify-between">
+                      <span className="text-theme-muted text-sm">Peak Latency</span>
+                      <span className="text-theme-primary">{selectedIncident.peak_latency_ms.toFixed(1)}ms</span>
                     </div>
                   )}
                 </div>
@@ -495,6 +552,84 @@ export function Incidents() {
                   </div>
                 )}
 
+                {/* Associated Alerts */}
+                <div className="border-t border-theme pt-4 mb-4">
+                  <button
+                    onClick={() => setAlertsExpanded(!alertsExpanded)}
+                    className="w-full flex items-center justify-between text-sm font-medium text-theme-muted mb-3 hover:text-theme-primary transition-colors"
+                  >
+                    <span className="flex items-center gap-2">
+                      <Bell className="w-4 h-4" />
+                      Associated Alerts ({incidentAlerts.length})
+                    </span>
+                    {alertsExpanded ? (
+                      <ChevronDown className="w-4 h-4" />
+                    ) : (
+                      <ChevronRight className="w-4 h-4" />
+                    )}
+                  </button>
+
+                  {alertsExpanded && (
+                    <div className="space-y-2 max-h-64 overflow-y-auto">
+                      {alertsLoading ? (
+                        <div className="flex items-center justify-center py-4">
+                          <Loader2 className="w-5 h-5 animate-spin text-theme-muted" />
+                        </div>
+                      ) : incidentAlerts.length === 0 ? (
+                        <p className="text-sm text-theme-muted text-center py-4">No alerts linked to this incident</p>
+                      ) : (
+                        incidentAlerts.map((alert) => (
+                          <div
+                            key={alert.id}
+                            className={`p-3 rounded-lg border ${
+                              alert.status === 'resolved'
+                                ? 'bg-surface-primary border-theme opacity-60'
+                                : alert.severity === 'critical'
+                                ? 'bg-pilot-red/10 border-pilot-red/30'
+                                : alert.severity === 'major'
+                                ? 'bg-warning/10 border-warning/30'
+                                : 'bg-surface-primary border-theme'
+                            }`}
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-2 mb-1">
+                                  <span className={`px-1.5 py-0.5 rounded text-xs font-medium uppercase ${
+                                    alert.severity === 'critical' ? 'bg-pilot-red text-white' :
+                                    alert.severity === 'major' ? 'bg-warning text-neutral-900' :
+                                    alert.severity === 'minor' ? 'bg-pilot-yellow text-neutral-900' :
+                                    'bg-gray-500 text-white'
+                                  }`}>
+                                    {alert.severity}
+                                  </span>
+                                  <span className={`text-xs ${
+                                    alert.status === 'resolved' ? 'text-status-healthy' :
+                                    alert.status === 'acknowledged' ? 'text-pilot-cyan' :
+                                    'text-theme-muted'
+                                  }`}>
+                                    {alert.status}
+                                  </span>
+                                </div>
+                                <p className="text-sm text-theme-primary truncate">{alert.title}</p>
+                                <p className="text-xs text-theme-muted mt-1 line-clamp-2">{alert.description}</p>
+                                <div className="flex items-center gap-3 mt-2 text-xs text-theme-muted">
+                                  <span className="flex items-center gap-1">
+                                    <Clock className="w-3 h-3" />
+                                    {formatRelativeTime(new Date(alert.created_at))}
+                                  </span>
+                                  {alert.event_count > 1 && (
+                                    <span className="text-pilot-cyan">{alert.event_count} events</span>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  )}
+                </div>
+
                 {/* Timeline / Notes */}
                 <div className="border-t border-theme pt-4">
                   <h4 className="text-sm font-medium text-theme-muted mb-3 flex items-center gap-2">
@@ -523,22 +658,14 @@ export function Incidents() {
                     </div>
                   )}
 
-                  {/* Notes List */}
+                  {/* Notes */}
                   <div className="space-y-3 max-h-64 overflow-y-auto">
-                    {(selectedIncident.notes || []).length === 0 ? (
+                    {!selectedIncident.notes ? (
                       <p className="text-sm text-theme-muted text-center py-4">No notes yet</p>
                     ) : (
-                      selectedIncident.notes.map((note, idx) => (
-                        <div key={idx} className="bg-surface-primary rounded-lg p-3">
-                          <p className="text-sm text-theme-primary">{note.text || note}</p>
-                          {note.created_at && (
-                            <p className="text-xs text-theme-muted mt-1">
-                              {formatRelativeTime(note.created_at)}
-                              {note.author && ` by ${note.author}`}
-                            </p>
-                          )}
-                        </div>
-                      ))
+                      <div className="bg-surface-primary rounded-lg p-3">
+                        <p className="text-sm text-theme-primary whitespace-pre-wrap">{selectedIncident.notes}</p>
+                      </div>
                     )}
                   </div>
                 </div>

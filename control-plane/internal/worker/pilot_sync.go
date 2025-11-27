@@ -2,53 +2,22 @@ package worker
 
 import (
 	"context"
+	"encoding/binary"
+	"fmt"
 	"log/slog"
+	"net"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/pilot-net/icmp-mon/control-plane/internal/pilot"
+	"github.com/pilot-net/icmp-mon/control-plane/internal/store"
 	"github.com/pilot-net/icmp-mon/pkg/types"
 )
 
 // PilotClient defines the interface for the Pilot API client.
-// This is a placeholder - implement when Pilot API access is available.
 type PilotClient interface {
 	// ListIPPools returns all IP pools from Pilot API.
-	ListIPPools(ctx context.Context) ([]PilotIPPool, error)
-
-	// GetIPPoolDetails returns detailed information for an IP pool.
-	GetIPPoolDetails(ctx context.Context, poolID int) (*PilotIPPoolDetails, error)
-}
-
-// PilotIPPool represents an IP pool from the Pilot API.
-type PilotIPPool struct {
-	ID                 int
-	NetworkAddress     string
-	NetworkSize        int
-	GatewayAddress     string
-	FirstUsableAddress string
-	LastUsableAddress  string
-	VLANID             *int
-	ServiceID          *int
-	SubscriberID       *int
-	SubscriberName     *string
-	LocationID         *int
-	LocationAddress    *string
-	City               *string
-	Region             *string
-	POPName            *string
-	GatewayDevice      *string
-}
-
-// PilotIPPoolDetails contains detailed pool info including IP assignments.
-type PilotIPPoolDetails struct {
-	Pool      PilotIPPool
-	AssignedIPs []PilotIPAssignment
-}
-
-// PilotIPAssignment represents an IP assignment within a pool.
-type PilotIPAssignment struct {
-	IPAddress string
-	IPType    types.IPType // gateway, infrastructure, customer
-	Notes     string
+	ListIPPools(ctx context.Context) ([]pilot.IPPool, error)
 }
 
 // PilotSyncStore defines the storage interface for the sync worker.
@@ -68,8 +37,11 @@ type PilotSyncStore interface {
 	// ListSubnets returns all active subnets.
 	ListSubnets(ctx context.Context) ([]types.Subnet, error)
 
-	// CreateTargetForSubnet creates a new target for a subnet.
-	CreateTargetForSubnet(ctx context.Context, target *types.Target) error
+	// CreateAutoTarget creates a target with auto-seeding parameters.
+	CreateAutoTarget(ctx context.Context, params store.AutoTargetParams) error
+
+	// UpdateTargetTagsBySubnet updates tags on all targets in a subnet.
+	UpdateTargetTagsBySubnet(ctx context.Context, subnetID string, tags map[string]string) error
 }
 
 // PilotSyncConfig holds configuration for the sync worker.
@@ -232,14 +204,15 @@ func (w *PilotSyncWorker) runOnce(ctx context.Context) {
 	)
 }
 
-func (w *PilotSyncWorker) createSubnet(ctx context.Context, pool *PilotIPPool) error {
+func (w *PilotSyncWorker) createSubnet(ctx context.Context, pool *pilot.IPPool) error {
 	subnet := &types.Subnet{
+		ID:                 uuid.New().String(),
 		PilotSubnetID:      &pool.ID,
 		NetworkAddress:     pool.NetworkAddress,
 		NetworkSize:        pool.NetworkSize,
-		GatewayAddress:     &pool.GatewayAddress,
-		FirstUsableAddress: &pool.FirstUsableAddress,
-		LastUsableAddress:  &pool.LastUsableAddress,
+		GatewayAddress:     pool.GatewayAddress,
+		FirstUsableAddress: pool.FirstUsableAddress,
+		LastUsableAddress:  pool.LastUsableAddress,
 		VLANID:             pool.VLANID,
 		ServiceID:          pool.ServiceID,
 		SubscriberID:       pool.SubscriberID,
@@ -250,6 +223,8 @@ func (w *PilotSyncWorker) createSubnet(ctx context.Context, pool *PilotIPPool) e
 		Region:             pool.Region,
 		POPName:            pool.POPName,
 		GatewayDevice:      pool.GatewayDevice,
+		SubnetType:         pool.SubnetType,
+		SubnetTypeName:     pool.SubnetTypeName,
 		State:              "active",
 	}
 
@@ -261,18 +236,206 @@ func (w *PilotSyncWorker) createSubnet(ctx context.Context, pool *PilotIPPool) e
 		"subnet_id", subnet.ID,
 		"pilot_id", pool.ID,
 		"network", pool.NetworkAddress,
+		"type", pool.TypeString(),
+		"subscriber", pool.SubscriberName,
+	)
+
+	// Auto-seed targets for discovery
+	gatewayCreated, customerCount := w.seedSubnetTargets(ctx, subnet)
+	w.logger.Info("subnet targets seeded",
+		"subnet_id", subnet.ID,
+		"network", subnet.NetworkAddress,
+		"gateway_created", gatewayCreated,
+		"customer_targets", customerCount,
 	)
 
 	return nil
 }
 
-func (w *PilotSyncWorker) updateSubnet(ctx context.Context, existing *types.Subnet, pool *PilotIPPool) error {
+// seedSubnetTargets creates auto-discovery targets for a subnet.
+// Returns whether gateway was created and the count of customer targets created.
+func (w *PilotSyncWorker) seedSubnetTargets(ctx context.Context, subnet *types.Subnet) (bool, int) {
+	gatewayCreated := false
+	customerCount := 0
+
+	// Build tags from subnet metadata
+	tags := buildTargetTags(subnet)
+
+	// 1. Create gateway target if gateway_address is specified
+	if subnet.GatewayAddress != nil && *subnet.GatewayAddress != "" {
+		err := w.store.CreateAutoTarget(ctx, store.AutoTargetParams{
+			ID:              uuid.New().String(),
+			IP:              *subnet.GatewayAddress,
+			SubnetID:        subnet.ID,
+			IPType:          types.IPTypeGateway,
+			Tier:            "vlan_gateway",
+			Ownership:       types.OwnershipAuto,
+			Origin:          types.OriginSync,
+			MonitoringState: types.StateUnknown,
+			DisplayName:     fmt.Sprintf("Gateway for %s", subnet.NetworkAddress),
+			Tags:            tags,
+		})
+		if err != nil {
+			w.logger.Warn("failed to create gateway target", "ip", *subnet.GatewayAddress, "error", err)
+		} else {
+			gatewayCreated = true
+		}
+	}
+
+	// 2. Calculate and create customer targets for usable IP range
+	usableIPs, err := calculateUsableIPs(subnet)
+	if err != nil {
+		w.logger.Warn("failed to calculate usable IPs", "subnet_id", subnet.ID, "error", err)
+		return gatewayCreated, customerCount
+	}
+
+	for _, ip := range usableIPs {
+		err := w.store.CreateAutoTarget(ctx, store.AutoTargetParams{
+			ID:              uuid.New().String(),
+			IP:              ip,
+			SubnetID:        subnet.ID,
+			IPType:          types.IPTypeCustomer,
+			Tier:            "standard",
+			Ownership:       types.OwnershipAuto,
+			Origin:          types.OriginSync,
+			MonitoringState: types.StateUnknown,
+			Tags:            tags,
+		})
+		if err != nil {
+			w.logger.Debug("failed to create customer target", "ip", ip, "error", err)
+		} else {
+			customerCount++
+		}
+	}
+
+	return gatewayCreated, customerCount
+}
+
+// buildTargetTags creates tags from subnet metadata for target enrichment.
+// All Pilot metadata is stored as tags for point-in-time filtering in metrics queries.
+func buildTargetTags(subnet *types.Subnet) map[string]string {
+	tags := map[string]string{
+		"auto_seeded": "true",
+		"pilot_sync":  "true",
+		"subnet":      subnet.NetworkAddress,
+	}
+
+	// Location metadata
+	if subnet.LocationAddress != nil && *subnet.LocationAddress != "" {
+		tags["address"] = *subnet.LocationAddress
+	}
+	if subnet.LocationID != nil {
+		tags["location_id"] = fmt.Sprintf("%d", *subnet.LocationID)
+	}
+	if subnet.City != nil && *subnet.City != "" {
+		tags["city"] = *subnet.City
+	}
+	if subnet.Region != nil && *subnet.Region != "" {
+		tags["region"] = *subnet.Region
+	}
+
+	// Subscriber metadata
+	if subnet.SubscriberName != nil && *subnet.SubscriberName != "" {
+		tags["subscriber"] = *subnet.SubscriberName
+	}
+	if subnet.SubscriberID != nil {
+		tags["subscriber_id"] = fmt.Sprintf("%d", *subnet.SubscriberID)
+	}
+
+	// Service metadata
+	if subnet.ServiceID != nil {
+		tags["service_id"] = fmt.Sprintf("%d", *subnet.ServiceID)
+	}
+
+	// Network topology
+	if subnet.POPName != nil && *subnet.POPName != "" {
+		tags["pop"] = *subnet.POPName
+	}
+	if subnet.GatewayDevice != nil && *subnet.GatewayDevice != "" {
+		tags["csw"] = *subnet.GatewayDevice
+	}
+	if subnet.VLANID != nil {
+		tags["vlan_id"] = fmt.Sprintf("%d", *subnet.VLANID)
+	}
+
+	return tags
+}
+
+// calculateUsableIPs returns all usable customer IPs in a subnet.
+// Excludes network address, gateway, and broadcast.
+func calculateUsableIPs(subnet *types.Subnet) ([]string, error) {
+	_, network, err := net.ParseCIDR(subnet.NetworkAddress)
+	if err != nil {
+		return nil, fmt.Errorf("parsing CIDR: %w", err)
+	}
+
+	var gatewayIP net.IP
+	if subnet.GatewayAddress != nil && *subnet.GatewayAddress != "" {
+		gatewayIP = net.ParseIP(*subnet.GatewayAddress)
+	}
+
+	maskSize, bits := network.Mask.Size()
+
+	// Special cases
+	if maskSize == 32 {
+		return []string{}, nil
+	}
+	if maskSize == 31 {
+		// Point-to-point link
+		var ips []string
+		ip := network.IP.To4()
+		if ip == nil {
+			return nil, fmt.Errorf("only IPv4 supported")
+		}
+		for i := 0; i < 2; i++ {
+			currentIP := make(net.IP, 4)
+			copy(currentIP, ip)
+			currentIP[3] += byte(i)
+			if gatewayIP != nil && currentIP.Equal(gatewayIP) {
+				continue
+			}
+			ips = append(ips, currentIP.String())
+		}
+		return ips, nil
+	}
+
+	// Standard subnet
+	hostBits := bits - maskSize
+	totalHosts := (1 << hostBits) - 2
+
+	if totalHosts <= 0 {
+		return []string{}, nil
+	}
+
+	ip := network.IP.To4()
+	if ip == nil {
+		return nil, fmt.Errorf("only IPv4 supported")
+	}
+	networkInt := binary.BigEndian.Uint32(ip)
+
+	var ips []string
+	for i := uint32(1); i <= uint32(totalHosts); i++ {
+		hostInt := networkInt + i
+		hostIP := make(net.IP, 4)
+		binary.BigEndian.PutUint32(hostIP, hostInt)
+
+		if gatewayIP != nil && hostIP.Equal(gatewayIP) {
+			continue
+		}
+
+		ips = append(ips, hostIP.String())
+	}
+
+	return ips, nil
+}
+
+func (w *PilotSyncWorker) updateSubnet(ctx context.Context, existing *types.Subnet, pool *pilot.IPPool) error {
 	// Update fields from Pilot
 	existing.NetworkAddress = pool.NetworkAddress
 	existing.NetworkSize = pool.NetworkSize
-	existing.GatewayAddress = &pool.GatewayAddress
-	existing.FirstUsableAddress = &pool.FirstUsableAddress
-	existing.LastUsableAddress = &pool.LastUsableAddress
+	existing.GatewayAddress = pool.GatewayAddress
+	existing.FirstUsableAddress = pool.FirstUsableAddress
+	existing.LastUsableAddress = pool.LastUsableAddress
 	existing.VLANID = pool.VLANID
 	existing.ServiceID = pool.ServiceID
 	existing.SubscriberID = pool.SubscriberID
@@ -283,11 +446,29 @@ func (w *PilotSyncWorker) updateSubnet(ctx context.Context, existing *types.Subn
 	existing.Region = pool.Region
 	existing.POPName = pool.POPName
 	existing.GatewayDevice = pool.GatewayDevice
+	existing.SubnetType = pool.SubnetType
+	existing.SubnetTypeName = pool.SubnetTypeName
 
-	return w.store.UpdateSubnet(ctx, existing)
+	// Update the subnet in database
+	if err := w.store.UpdateSubnet(ctx, existing); err != nil {
+		return err
+	}
+
+	// Sync tags to all targets in this subnet (for point-in-time metadata accuracy)
+	tags := buildTargetTags(existing)
+	if err := w.store.UpdateTargetTagsBySubnet(ctx, existing.ID, tags); err != nil {
+		w.logger.Warn("failed to update target tags on subnet update",
+			"subnet_id", existing.ID,
+			"network", existing.NetworkAddress,
+			"error", err,
+		)
+		// Don't fail the update if tag sync fails
+	}
+
+	return nil
 }
 
-func (w *PilotSyncWorker) subnetNeedsUpdate(existing *types.Subnet, pool *PilotIPPool) bool {
+func (w *PilotSyncWorker) subnetNeedsUpdate(existing *types.Subnet, pool *pilot.IPPool) bool {
 	// Compare key fields
 	if existing.NetworkAddress != pool.NetworkAddress {
 		return true
@@ -298,13 +479,24 @@ func (w *PilotSyncWorker) subnetNeedsUpdate(existing *types.Subnet, pool *PilotI
 	if ptrStringNotEqual(existing.SubscriberName, pool.SubscriberName) {
 		return true
 	}
-	if ptrStringNotEqual(existing.POPName, pool.POPName) {
-		return true
-	}
 	if ptrStringNotEqual(existing.GatewayDevice, pool.GatewayDevice) {
 		return true
 	}
+	if ptrIntNotEqual(existing.SubnetType, pool.SubnetType) {
+		return true
+	}
 	return false
+}
+
+// Helper to compare pointer ints
+func ptrIntNotEqual(a, b *int) bool {
+	if a == nil && b == nil {
+		return false
+	}
+	if a == nil || b == nil {
+		return true
+	}
+	return *a != *b
 }
 
 // Helper to compare pointer strings

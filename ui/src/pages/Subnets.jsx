@@ -1,5 +1,5 @@
-import { useState, useEffect, useMemo } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useState, useEffect, useCallback } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Network,
   RefreshCw,
@@ -9,9 +9,8 @@ import {
   Building2,
   Server,
   Archive,
-  Eye,
-  EyeOff,
   Plus,
+  ChevronLeft,
 } from 'lucide-react';
 
 import { PageHeader, PageContent } from '../components/Layout';
@@ -57,8 +56,6 @@ function CreateSubnetModal({ isOpen, onClose, onSave }) {
     setError(null);
     setSaving(true);
     try {
-      // Build request with only non-empty optional fields
-      // Backend expects network_address in CIDR format (e.g., "192.168.1.0/24")
       const networkSize = parseInt(formData.network_size, 10);
       const req = {
         network_address: `${formData.network_address}/${networkSize}`,
@@ -202,7 +199,7 @@ function CreateSubnetModal({ isOpen, onClose, onSave }) {
   );
 }
 
-// Helper to format subnet CIDR (handles case where network_address may already include prefix)
+// Helper to format subnet CIDR
 function formatSubnetCIDR(subnet) {
   if (!subnet) return '';
   const addr = subnet.network_address || '';
@@ -210,88 +207,147 @@ function formatSubnetCIDR(subnet) {
   return subnet.network_size ? `${addr}/${subnet.network_size}` : addr;
 }
 
+const PAGE_SIZE = 50;
+
+// Pagination component
+function Pagination({ currentPage, totalPages, totalCount, pageSize, onPageChange }) {
+  const startItem = (currentPage - 1) * pageSize + 1;
+  const endItem = Math.min(currentPage * pageSize, totalCount);
+
+  return (
+    <div className="flex items-center justify-between px-4 py-3 border-t border-theme">
+      <div className="text-sm text-theme-muted">
+        Showing <span className="font-medium text-theme-secondary">{startItem.toLocaleString()}</span> to{' '}
+        <span className="font-medium text-theme-secondary">{endItem.toLocaleString()}</span> of{' '}
+        <span className="font-medium text-theme-secondary">{totalCount.toLocaleString()}</span> results
+      </div>
+      <div className="flex items-center gap-2">
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={() => onPageChange(currentPage - 1)}
+          disabled={currentPage <= 1}
+          className="gap-1"
+        >
+          <ChevronLeft className="w-4 h-4" />
+          Previous
+        </Button>
+        <span className="text-sm text-theme-secondary px-3">
+          Page {currentPage} of {totalPages}
+        </span>
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={() => onPageChange(currentPage + 1)}
+          disabled={currentPage >= totalPages}
+          className="gap-1"
+        >
+          Next
+          <ChevronRight className="w-4 h-4" />
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 export function Subnets() {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  // Get params from URL
+  const initialPage = parseInt(searchParams.get('page') || '1', 10);
+  const initialSearch = searchParams.get('search') || '';
+  const initialPop = searchParams.get('pop') || '';
+  const initialIncludeArchived = searchParams.get('archived') === 'true';
+
   const [subnets, setSubnets] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [search, setSearch] = useState('');
-  const [popFilter, setPopFilter] = useState('');
-  const [stateFilter, setStateFilter] = useState('');
-  const [showArchived, setShowArchived] = useState(false);
+
+  // Pagination state
+  const [currentPage, setCurrentPage] = useState(initialPage);
+  const [totalCount, setTotalCount] = useState(0);
+
+  // Filter state
+  const [search, setSearch] = useState(initialSearch);
+  const [searchInput, setSearchInput] = useState(initialSearch);
+  const [popFilter, setPopFilter] = useState(initialPop);
+  const [includeArchived, setIncludeArchived] = useState(initialIncludeArchived);
+
   const [showCreateModal, setShowCreateModal] = useState(false);
 
-  const fetchData = async () => {
+  // Debounce search
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (searchInput !== search) {
+        setSearch(searchInput);
+        setCurrentPage(1);
+      }
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [searchInput, search]);
+
+  // Update URL params when filters change
+  useEffect(() => {
+    const params = new URLSearchParams();
+    if (currentPage > 1) params.set('page', currentPage.toString());
+    if (search) params.set('search', search);
+    if (popFilter) params.set('pop', popFilter);
+    if (includeArchived) params.set('archived', 'true');
+    setSearchParams(params, { replace: true });
+  }, [currentPage, search, popFilter, includeArchived, setSearchParams]);
+
+  const fetchData = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
-      const res = await endpoints.listSubnets();
+
+      const offset = (currentPage - 1) * PAGE_SIZE;
+
+      const res = await endpoints.listSubnetsPaginated({
+        limit: PAGE_SIZE,
+        offset,
+        pop: popFilter,
+        search,
+        includeArchived,
+      });
+
       setSubnets(res.subnets || []);
+      setTotalCount(res.total_count || 0);
     } catch (err) {
       console.error('Failed to fetch subnets:', err);
       setError(err.message);
     } finally {
       setLoading(false);
     }
-  };
+  }, [currentPage, search, popFilter, includeArchived]);
 
   useEffect(() => {
     fetchData();
-  }, []);
+  }, [fetchData]);
 
-  // Get unique POPs for filter
-  const pops = useMemo(() => {
-    const uniquePops = [...new Set(subnets.map(s => s.pop_name).filter(Boolean))];
-    return [
-      { value: '', label: 'All POPs' },
-      ...uniquePops.map(p => ({ value: p, label: p })),
-    ];
-  }, [subnets]);
+  // Auto-refresh (less aggressive with pagination)
+  useEffect(() => {
+    const interval = setInterval(fetchData, 30000);
+    return () => clearInterval(interval);
+  }, [fetchData]);
 
-  const stateOptions = [
-    { value: '', label: 'All States' },
-    { value: 'active', label: 'Active' },
-    { value: 'archived', label: 'Archived' },
-  ];
+  const totalPages = Math.ceil(totalCount / PAGE_SIZE);
 
-  const filteredSubnets = useMemo(() => {
-    return subnets.filter(subnet => {
-      // Filter archived
-      if (!showArchived && subnet.archived_at) return false;
-      if (stateFilter === 'active' && subnet.archived_at) return false;
-      if (stateFilter === 'archived' && !subnet.archived_at) return false;
+  const handlePageChange = (newPage) => {
+    setCurrentPage(newPage);
+    window.scrollTo(0, 0);
+  };
 
-      // Search
-      if (search) {
-        const searchLower = search.toLowerCase();
-        const matchesNetwork = subnet.network_address?.toLowerCase().includes(searchLower);
-        const matchesSubscriber = subnet.subscriber_name?.toLowerCase().includes(searchLower);
-        const matchesPop = subnet.pop_name?.toLowerCase().includes(searchLower);
-        const matchesCity = subnet.city?.toLowerCase().includes(searchLower);
-        if (!matchesNetwork && !matchesSubscriber && !matchesPop && !matchesCity) {
-          return false;
-        }
-      }
+  const handlePopChange = (value) => {
+    setPopFilter(value);
+    setCurrentPage(1);
+  };
 
-      // POP filter
-      if (popFilter && subnet.pop_name !== popFilter) return false;
-
-      return true;
-    });
-  }, [subnets, search, popFilter, stateFilter, showArchived]);
-
-  const stats = useMemo(() => {
-    const active = subnets.filter(s => !s.archived_at);
-    const archived = subnets.filter(s => s.archived_at);
-    const popCount = new Set(active.map(s => s.pop_name).filter(Boolean)).size;
-    const subscriberCount = new Set(active.map(s => s.subscriber_id).filter(Boolean)).size;
-    return {
-      total: active.length,
-      archived: archived.length,
-      pops: popCount,
-      subscribers: subscriberCount,
-    };
-  }, [subnets]);
+  const handleArchivedToggle = () => {
+    setIncludeArchived(!includeArchived);
+    setCurrentPage(1);
+  };
 
   if (error) {
     return (
@@ -319,18 +375,9 @@ export function Subnets() {
     <>
       <PageHeader
         title="Subnets"
-        description={`${stats.total} active subnets across ${stats.pops} POPs`}
+        description={`${totalCount.toLocaleString()} subnets`}
         actions={
           <div className="flex gap-3">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setShowArchived(!showArchived)}
-              className="gap-2"
-            >
-              {showArchived ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-              {showArchived ? 'Hide Archived' : 'Show Archived'}
-            </Button>
             <Button variant="secondary" onClick={fetchData} className="gap-2">
               <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
               Refresh
@@ -347,25 +394,24 @@ export function Subnets() {
         {/* Summary Cards */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
           <MetricCard
-            title="Active Subnets"
-            value={stats.total.toLocaleString()}
+            title="Total Subnets"
+            value={totalCount.toLocaleString()}
             icon={Network}
           />
           <MetricCard
-            title="POPs"
-            value={stats.pops.toLocaleString()}
+            title="Current Page"
+            value={`${currentPage} / ${totalPages || 1}`}
             icon={MapPin}
           />
           <MetricCard
-            title="Subscribers"
-            value={stats.subscribers.toLocaleString()}
+            title="Per Page"
+            value={PAGE_SIZE.toString()}
             icon={Building2}
           />
           <MetricCard
-            title="Archived"
-            value={stats.archived.toLocaleString()}
+            title="Showing"
+            value={subnets.length.toString()}
             icon={Archive}
-            status={stats.archived > 0 ? 'degraded' : 'healthy'}
           />
         </div>
 
@@ -373,36 +419,57 @@ export function Subnets() {
         <Card className="mb-6">
           <div className="flex flex-wrap gap-4 items-center">
             <SearchInput
-              value={search}
-              onChange={setSearch}
-              placeholder="Search subnet, subscriber, POP..."
+              value={searchInput}
+              onChange={setSearchInput}
+              placeholder="Search subnet, subscriber, location..."
               className="w-72"
             />
-            <Select
-              options={pops}
+            <input
+              type="text"
               value={popFilter}
-              onChange={setPopFilter}
-              className="w-40"
+              onChange={(e) => handlePopChange(e.target.value)}
+              placeholder="Filter by POP"
+              className="px-3 py-2 bg-surface-primary border border-theme rounded-lg text-theme-primary placeholder-theme-muted focus:outline-none focus:ring-2 focus:ring-pilot-cyan w-40 text-sm"
             />
-            <Select
-              options={stateOptions}
-              value={stateFilter}
-              onChange={setStateFilter}
-              className="w-40"
-            />
+            <label className="flex items-center gap-2 text-sm text-theme-secondary cursor-pointer">
+              <input
+                type="checkbox"
+                checked={includeArchived}
+                onChange={handleArchivedToggle}
+                className="rounded border-theme bg-surface-primary text-pilot-cyan focus:ring-pilot-cyan"
+              />
+              Include archived
+            </label>
+            {(search || popFilter || includeArchived) && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setSearchInput('');
+                  setSearch('');
+                  setPopFilter('');
+                  setIncludeArchived(false);
+                  setCurrentPage(1);
+                }}
+                className="text-theme-muted hover:text-theme-primary"
+              >
+                Clear filters
+              </Button>
+            )}
           </div>
         </Card>
 
         {/* Subnet List */}
-        <Card>
-          {loading ? (
-            <div className="flex items-center justify-center py-12">
-              <RefreshCw className="w-6 h-6 animate-spin text-theme-muted" />
+        <Card className="overflow-hidden">
+          {loading && subnets.length === 0 ? (
+            <div className="text-center py-12 text-theme-muted">
+              <RefreshCw className="w-8 h-8 mx-auto mb-4 animate-spin" />
+              <p>Loading subnets...</p>
             </div>
-          ) : filteredSubnets.length === 0 ? (
+          ) : subnets.length === 0 ? (
             <div className="text-center py-12 text-theme-muted">
               <Network className="w-12 h-12 mx-auto mb-4 opacity-50" />
-              {subnets.length === 0 ? (
+              {totalCount === 0 && !search && !popFilter ? (
                 <>
                   <p>No subnets configured</p>
                   <p className="text-sm mt-1">Subnets will appear here after syncing with Pilot</p>
@@ -412,74 +479,87 @@ export function Subnets() {
               )}
             </div>
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Network</TableHead>
-                  <TableHead>Subscriber</TableHead>
-                  <TableHead>POP</TableHead>
-                  <TableHead>Gateway</TableHead>
-                  <TableHead>Location</TableHead>
-                  <TableHead>State</TableHead>
-                  <TableHead></TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {filteredSubnets.map((subnet) => (
-                  <TableRow
-                    key={subnet.id}
-                    onClick={() => navigate(`/subnets/${subnet.id}`)}
-                    className={`cursor-pointer ${subnet.archived_at ? 'opacity-60' : ''}`}
-                  >
-                    <TableCell>
-                      <div className="flex items-center gap-2">
-                        <Network className="w-4 h-4 text-pilot-cyan" />
-                        <span className="font-mono text-theme-primary">
-                          {formatSubnetCIDR(subnet)}
-                        </span>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <div>
-                        <div className="text-theme-primary">{subnet.subscriber_name || '—'}</div>
-                        {subnet.subscriber_id && (
-                          <div className="text-xs text-theme-muted">ID: {subnet.subscriber_id}</div>
-                        )}
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <span className="px-2 py-0.5 bg-pilot-cyan/20 text-pilot-cyan rounded text-xs font-medium">
-                        {subnet.pop_name || '—'}
-                      </span>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex items-center gap-2">
-                        <Server className="w-3 h-3 text-theme-muted" />
-                        <span className="font-mono text-sm text-theme-secondary">
-                          {subnet.gateway_address || '—'}
-                        </span>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <div className="text-sm">
-                        <div className="text-theme-primary">{subnet.city || '—'}</div>
-                        <div className="text-xs text-theme-muted">{subnet.region}</div>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      {subnet.archived_at ? (
-                        <StatusBadge status="down" label="Archived" size="sm" />
-                      ) : (
-                        <StatusBadge status="healthy" label="Active" size="sm" />
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      <ChevronRight className="w-4 h-4 text-theme-muted" />
-                    </TableCell>
+            <>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Network</TableHead>
+                    <TableHead>Subscriber</TableHead>
+                    <TableHead>POP</TableHead>
+                    <TableHead>Gateway</TableHead>
+                    <TableHead>Location</TableHead>
+                    <TableHead>State</TableHead>
+                    <TableHead></TableHead>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+                </TableHeader>
+                <TableBody>
+                  {subnets.map((subnet) => (
+                    <TableRow
+                      key={subnet.id}
+                      onClick={() => navigate(`/subnets/${subnet.id}`)}
+                      className={`cursor-pointer ${subnet.archived_at ? 'opacity-60' : ''}`}
+                    >
+                      <TableCell>
+                        <div className="flex items-center gap-2">
+                          <Network className="w-4 h-4 text-pilot-cyan" />
+                          <span className="font-mono text-theme-primary">
+                            {formatSubnetCIDR(subnet)}
+                          </span>
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <div>
+                          <div className="text-theme-primary">{subnet.subscriber_name || '—'}</div>
+                          {subnet.service_id && (
+                            <div className="text-xs text-theme-muted">Service ID: {subnet.service_id}</div>
+                          )}
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <span className="px-2 py-0.5 bg-pilot-cyan/20 text-pilot-cyan rounded text-xs font-medium">
+                          {subnet.pop_name || '—'}
+                        </span>
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex items-center gap-2">
+                          <Server className="w-3 h-3 text-theme-muted" />
+                          <span className="font-mono text-sm text-theme-secondary">
+                            {subnet.gateway_address || '—'}
+                          </span>
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <div className="text-sm">
+                          <div className="text-theme-primary">{subnet.city || '—'}</div>
+                          <div className="text-xs text-theme-muted">{subnet.region}</div>
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        {subnet.archived_at ? (
+                          <StatusBadge status="down" label="Archived" size="sm" />
+                        ) : (
+                          <StatusBadge status="healthy" label="Active" size="sm" />
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        <ChevronRight className="w-4 h-4 text-theme-muted" />
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+
+              {/* Pagination */}
+              {totalPages > 1 && (
+                <Pagination
+                  currentPage={currentPage}
+                  totalPages={totalPages}
+                  totalCount={totalCount}
+                  pageSize={PAGE_SIZE}
+                  onPageChange={handlePageChange}
+                />
+              )}
+            </>
           )}
         </Card>
       </PageContent>

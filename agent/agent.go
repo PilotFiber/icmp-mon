@@ -472,6 +472,14 @@ func defaultTiers() map[string]types.Tier {
 			ProbeTimeout:  5 * time.Second,
 			ProbeRetries:  0,
 		},
+		// VLAN Gateway tier - monitors gateway addresses for subnets
+		"vlan_gateway": {
+			Name:          "vlan_gateway",
+			DisplayName:   "VLAN Gateway",
+			ProbeInterval: 30 * time.Second,
+			ProbeTimeout:  3 * time.Second,
+			ProbeRetries:  1,
+		},
 		// Monitoring state machine tiers
 		"discovery": {
 			Name:          "discovery",

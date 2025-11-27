@@ -12,6 +12,13 @@
 // Management API:
 //   - GET  /api/v1/agents - List agents
 //   - GET  /api/v1/agents/{id} - Get agent details
+//   - PUT  /api/v1/agents/{id} - Update agent info
+//   - GET  /api/v1/agents/{id}/metrics - Get agent metrics history
+//   - GET  /api/v1/agents/{id}/stats - Get agent current stats
+//   - POST /api/v1/agents/{id}/archive - Archive agent (soft-delete)
+//   - POST /api/v1/agents/{id}/unarchive - Restore archived agent
+//   - GET  /api/v1/fleet/overview - Get fleet overview stats
+//   - GET  /api/v1/fleet/agents/stats - Get all agents current stats
 //   - GET  /api/v1/targets - List targets
 //   - POST /api/v1/targets - Create target
 //   - GET  /api/v1/tiers - List tiers
@@ -112,12 +119,23 @@ func (s *Server) registerRoutes() {
 	// Agent management
 	s.mux.HandleFunc("GET /api/v1/agents", s.handleListAgents)
 	s.mux.HandleFunc("GET /api/v1/agents/{id}", s.handleGetAgent)
+	s.mux.HandleFunc("PUT /api/v1/agents/{id}", s.handleUpdateAgent)
+	s.mux.HandleFunc("GET /api/v1/agents/{id}/metrics", s.handleAgentMetrics)
+	s.mux.HandleFunc("GET /api/v1/agents/{id}/stats", s.handleAgentStats)
+	s.mux.HandleFunc("POST /api/v1/agents/{id}/archive", s.handleArchiveAgent)
+	s.mux.HandleFunc("POST /api/v1/agents/{id}/unarchive", s.handleUnarchiveAgent)
 
-	// Targets
+	// Fleet overview
+	s.mux.HandleFunc("GET /api/v1/fleet/overview", s.handleFleetOverview)
+	s.mux.HandleFunc("GET /api/v1/fleet/agents/stats", s.handleAllAgentsStats)
+
+	// Targets - static routes must come before wildcard {id} routes
 	s.mux.HandleFunc("GET /api/v1/targets", s.handleListTargets)
 	s.mux.HandleFunc("POST /api/v1/targets", s.handleCreateTarget)
-	s.mux.HandleFunc("GET /api/v1/targets/{id}", s.handleGetTarget)
 	s.mux.HandleFunc("GET /api/v1/targets/status", s.handleGetAllTargetStatuses)
+	s.mux.HandleFunc("GET /api/v1/targets/review", s.handleListTargetsNeedingReview)
+	s.mux.HandleFunc("GET /api/v1/targets/tag-keys", s.handleGetTargetTagKeys)
+	s.mux.HandleFunc("GET /api/v1/targets/{id}", s.handleGetTarget)
 	s.mux.HandleFunc("GET /api/v1/targets/{id}/status", s.handleGetTargetStatus)
 	s.mux.HandleFunc("GET /api/v1/targets/{id}/history", s.handleGetTargetHistory)
 	s.mux.HandleFunc("GET /api/v1/targets/{id}/history/by-agent", s.handleGetTargetHistoryByAgent)
@@ -166,8 +184,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("GET /api/v1/subnets/{id}/stats", s.handleGetSubnetStats)
 	s.mux.HandleFunc("POST /api/v1/subnets/{id}/seed", s.handleSeedSubnetTargets)
 
-	// Target state management
-	s.mux.HandleFunc("GET /api/v1/targets/review", s.handleListTargetsNeedingReview)
+	// Target state management (dynamic routes already registered above)
 	s.mux.HandleFunc("POST /api/v1/targets/{id}/state", s.handleTransitionTargetState)
 	s.mux.HandleFunc("POST /api/v1/targets/{id}/acknowledge", s.handleAcknowledgeTarget)
 	s.mux.HandleFunc("GET /api/v1/targets/{id}/state-history", s.handleGetTargetStateHistory)
@@ -180,6 +197,19 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("GET /api/v1/activity", s.handleListActivity)
 	s.mux.HandleFunc("GET /api/v1/targets/{id}/activity", s.handleGetTargetActivity)
 	s.mux.HandleFunc("GET /api/v1/subnets/{id}/activity", s.handleGetSubnetActivity)
+
+	// Alerts
+	s.mux.HandleFunc("GET /api/v1/alerts", s.handleListAlerts)
+	s.mux.HandleFunc("GET /api/v1/alerts/stats", s.handleGetAlertStats)
+	s.mux.HandleFunc("GET /api/v1/alerts/correlations", s.handleGetAlertCorrelations)
+	s.mux.HandleFunc("GET /api/v1/alerts/{id}", s.handleGetAlert)
+	s.mux.HandleFunc("GET /api/v1/alerts/{id}/events", s.handleGetAlertEvents)
+	s.mux.HandleFunc("POST /api/v1/alerts/{id}/acknowledge", s.handleAcknowledgeAlert)
+	s.mux.HandleFunc("POST /api/v1/alerts/{id}/resolve", s.handleResolveAlert)
+
+	// Alert configuration
+	s.mux.HandleFunc("GET /api/v1/alerts/config", s.handleListAlertConfigs)
+	s.mux.HandleFunc("PUT /api/v1/alerts/config/{key}", s.handleUpdateAlertConfig)
 }
 
 // =============================================================================
@@ -404,11 +434,235 @@ func (s *Server) handleGetAgent(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, agent)
 }
 
+type updateAgentRequest struct {
+	Name       string            `json:"name"`
+	Region     string            `json:"region"`
+	Location   string            `json:"location"`
+	Provider   string            `json:"provider"`
+	Tags       map[string]string `json:"tags"`
+	MaxTargets int               `json:"max_targets"`
+}
+
+func (s *Server) handleUpdateAgent(w http.ResponseWriter, r *http.Request) {
+	agentID := r.PathValue("id")
+	if agentID == "" {
+		s.writeError(w, http.StatusBadRequest, "agent ID required")
+		return
+	}
+
+	var req updateAgentRequest
+	if err := s.readJSON(r, &req); err != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if req.Name == "" {
+		s.writeError(w, http.StatusBadRequest, "name is required")
+		return
+	}
+
+	err := s.svc.UpdateAgentInfo(r.Context(), agentID, service.UpdateAgentInfoRequest{
+		Name:       req.Name,
+		Region:     req.Region,
+		Location:   req.Location,
+		Provider:   req.Provider,
+		Tags:       req.Tags,
+		MaxTargets: req.MaxTargets,
+	})
+	if err != nil {
+		s.logger.Error("update agent failed", "agent", agentID, "error", err)
+		s.writeError(w, http.StatusInternalServerError, "failed to update agent")
+		return
+	}
+
+	// Return the updated agent
+	agent, err := s.svc.GetAgent(r.Context(), agentID)
+	if err != nil {
+		s.logger.Error("get agent after update failed", "agent", agentID, "error", err)
+		s.writeError(w, http.StatusInternalServerError, "agent updated but failed to retrieve")
+		return
+	}
+
+	s.writeJSON(w, http.StatusOK, agent)
+}
+
+func (s *Server) handleArchiveAgent(w http.ResponseWriter, r *http.Request) {
+	agentID := r.PathValue("id")
+	if agentID == "" {
+		s.writeError(w, http.StatusBadRequest, "agent ID required")
+		return
+	}
+
+	var req struct {
+		Reason string `json:"reason"`
+	}
+	if err := s.readJSON(r, &req); err != nil {
+		req.Reason = "archived via API"
+	}
+
+	if err := s.svc.ArchiveAgent(r.Context(), agentID, req.Reason); err != nil {
+		s.logger.Error("archive agent failed", "agent", agentID, "error", err)
+		s.writeError(w, http.StatusInternalServerError, "failed to archive agent")
+		return
+	}
+
+	s.writeJSON(w, http.StatusOK, map[string]string{
+		"status":  "archived",
+		"message": "agent archived successfully",
+	})
+}
+
+func (s *Server) handleUnarchiveAgent(w http.ResponseWriter, r *http.Request) {
+	agentID := r.PathValue("id")
+	if agentID == "" {
+		s.writeError(w, http.StatusBadRequest, "agent ID required")
+		return
+	}
+
+	if err := s.svc.UnarchiveAgent(r.Context(), agentID); err != nil {
+		s.logger.Error("unarchive agent failed", "agent", agentID, "error", err)
+		s.writeError(w, http.StatusInternalServerError, "failed to unarchive agent")
+		return
+	}
+
+	s.writeJSON(w, http.StatusOK, map[string]string{
+		"status":  "unarchived",
+		"message": "agent restored successfully",
+	})
+}
+
+// =============================================================================
+// AGENT METRICS ENDPOINTS
+// =============================================================================
+
+func (s *Server) handleAgentMetrics(w http.ResponseWriter, r *http.Request) {
+	agentID := r.PathValue("id")
+	if agentID == "" {
+		s.writeError(w, http.StatusBadRequest, "agent ID required")
+		return
+	}
+
+	// Parse duration from query params (default 1h)
+	durationStr := r.URL.Query().Get("duration")
+	if durationStr == "" {
+		durationStr = "1h"
+	}
+	duration, err := time.ParseDuration(durationStr)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid duration format")
+		return
+	}
+
+	// Cap at 24h to prevent excessive data
+	if duration > 24*time.Hour {
+		duration = 24 * time.Hour
+	}
+
+	metrics, err := s.svc.GetAgentMetrics(r.Context(), agentID, duration)
+	if err != nil {
+		s.logger.Error("get agent metrics failed", "agent", agentID, "error", err)
+		s.writeError(w, http.StatusInternalServerError, "failed to get agent metrics")
+		return
+	}
+
+	s.writeJSON(w, http.StatusOK, map[string]any{
+		"agent_id": agentID,
+		"duration": duration.String(),
+		"metrics":  metrics,
+		"count":    len(metrics),
+	})
+}
+
+func (s *Server) handleAgentStats(w http.ResponseWriter, r *http.Request) {
+	agentID := r.PathValue("id")
+	if agentID == "" {
+		s.writeError(w, http.StatusBadRequest, "agent ID required")
+		return
+	}
+
+	stats, err := s.svc.GetAgentCurrentStats(r.Context(), agentID)
+	if err != nil {
+		s.logger.Error("get agent stats failed", "agent", agentID, "error", err)
+		s.writeError(w, http.StatusInternalServerError, "failed to get agent stats")
+		return
+	}
+
+	if stats == nil {
+		s.writeError(w, http.StatusNotFound, "no stats available for agent")
+		return
+	}
+
+	s.writeJSON(w, http.StatusOK, stats)
+}
+
+func (s *Server) handleFleetOverview(w http.ResponseWriter, r *http.Request) {
+	overview, err := s.svc.GetFleetOverview(r.Context())
+	if err != nil {
+		s.logger.Error("get fleet overview failed", "error", err)
+		s.writeError(w, http.StatusInternalServerError, "failed to get fleet overview")
+		return
+	}
+
+	s.writeJSON(w, http.StatusOK, overview)
+}
+
+func (s *Server) handleAllAgentsStats(w http.ResponseWriter, r *http.Request) {
+	stats, err := s.svc.GetAllAgentsCurrentStats(r.Context())
+	if err != nil {
+		s.logger.Error("get all agents stats failed", "error", err)
+		s.writeError(w, http.StatusInternalServerError, "failed to get agents stats")
+		return
+	}
+
+	s.writeJSON(w, http.StatusOK, map[string]any{
+		"agents": stats,
+		"count":  len(stats),
+	})
+}
+
 // =============================================================================
 // TARGET ENDPOINTS
 // =============================================================================
 
 func (s *Server) handleListTargets(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query()
+
+	// Check if pagination is requested
+	limitStr := query.Get("limit")
+	offsetStr := query.Get("offset")
+
+	// If pagination params present, use paginated endpoint
+	if limitStr != "" || offsetStr != "" {
+		params := store.TargetListParams{
+			Tier:            query.Get("tier"),
+			MonitoringState: query.Get("state"),
+			Search:          query.Get("search"),
+			IncludeArchived: query.Get("include_archived") == "true",
+		}
+
+		if limitStr != "" {
+			if limit, err := strconv.Atoi(limitStr); err == nil {
+				params.Limit = limit
+			}
+		}
+		if offsetStr != "" {
+			if offset, err := strconv.Atoi(offsetStr); err == nil {
+				params.Offset = offset
+			}
+		}
+
+		result, err := s.svc.ListTargetsPaginated(r.Context(), params)
+		if err != nil {
+			s.logger.Error("list targets paginated failed", "error", err)
+			s.writeError(w, http.StatusInternalServerError, "failed to list targets")
+			return
+		}
+
+		s.writeJSON(w, http.StatusOK, result)
+		return
+	}
+
+	// Legacy: return all targets
 	targets, err := s.svc.ListTargets(r.Context())
 	if err != nil {
 		s.logger.Error("list targets failed", "error", err)

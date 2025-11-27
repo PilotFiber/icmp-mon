@@ -8,14 +8,16 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/pilot-net/icmp-mon/control-plane/internal/buffer"
 	"github.com/pilot-net/icmp-mon/control-plane/internal/store"
 	"github.com/pilot-net/icmp-mon/pkg/types"
 )
 
 // Service provides business logic operations.
 type Service struct {
-	store  *store.Store
-	logger *slog.Logger
+	store        *store.Store
+	logger       *slog.Logger
+	resultBuffer *buffer.ResultBuffer // Optional Redis buffer for probe results
 }
 
 // NewService creates a new service.
@@ -24,6 +26,12 @@ func NewService(store *store.Store, logger *slog.Logger) *Service {
 		store:  store,
 		logger: logger,
 	}
+}
+
+// SetResultBuffer sets the Redis buffer for probe results.
+// When set, IngestResults will push to Redis instead of writing directly to DB.
+func (s *Service) SetResultBuffer(buf *buffer.ResultBuffer) {
+	s.resultBuffer = buf
 }
 
 // =============================================================================
@@ -450,6 +458,96 @@ func (s *Service) GetAgent(ctx context.Context, id string) (*types.Agent, error)
 	return s.store.GetAgent(ctx, id)
 }
 
+// ArchiveAgent soft-deletes an agent by setting archived_at timestamp.
+// Archived agents are excluded from operational queries but remain in read queries.
+func (s *Service) ArchiveAgent(ctx context.Context, agentID, reason string) error {
+	// Get agent name for logging
+	agent, err := s.store.GetAgent(ctx, agentID)
+	if err != nil {
+		return fmt.Errorf("getting agent: %w", err)
+	}
+	if agent == nil {
+		return fmt.Errorf("agent not found: %s", agentID)
+	}
+
+	if err := s.store.ArchiveAgent(ctx, agentID, reason); err != nil {
+		return fmt.Errorf("archiving agent: %w", err)
+	}
+
+	s.logger.Info("agent archived", "id", agentID, "name", agent.Name, "reason", reason)
+	return nil
+}
+
+// UnarchiveAgent restores an archived agent.
+func (s *Service) UnarchiveAgent(ctx context.Context, agentID string) error {
+	agent, err := s.store.GetAgent(ctx, agentID)
+	if err != nil {
+		return fmt.Errorf("getting agent: %w", err)
+	}
+	if agent == nil {
+		return fmt.Errorf("agent not found: %s", agentID)
+	}
+
+	if err := s.store.UnarchiveAgent(ctx, agentID); err != nil {
+		return fmt.Errorf("unarchiving agent: %w", err)
+	}
+
+	s.logger.Info("agent unarchived", "id", agentID, "name", agent.Name)
+	return nil
+}
+
+// UpdateAgentInfoRequest contains parameters for updating agent info.
+type UpdateAgentInfoRequest struct {
+	Name       string
+	Region     string
+	Location   string
+	Provider   string
+	Tags       map[string]string
+	MaxTargets int
+}
+
+// UpdateAgentInfo updates user-editable agent information.
+func (s *Service) UpdateAgentInfo(ctx context.Context, agentID string, req UpdateAgentInfoRequest) error {
+	agent, err := s.store.GetAgent(ctx, agentID)
+	if err != nil {
+		return fmt.Errorf("getting agent: %w", err)
+	}
+	if agent == nil {
+		return fmt.Errorf("agent not found: %s", agentID)
+	}
+
+	if err := s.store.UpdateAgentInfo(ctx, agentID, req.Name, req.Region, req.Location, req.Provider, req.Tags, req.MaxTargets); err != nil {
+		return fmt.Errorf("updating agent info: %w", err)
+	}
+
+	s.logger.Info("agent info updated", "id", agentID, "name", req.Name)
+	return nil
+}
+
+// =============================================================================
+// AGENT METRICS
+// =============================================================================
+
+// GetAgentMetrics returns time-series metrics for an agent.
+func (s *Service) GetAgentMetrics(ctx context.Context, agentID string, duration time.Duration) ([]store.AgentMetricsPoint, error) {
+	return s.store.GetAgentMetrics(ctx, agentID, duration)
+}
+
+// GetAgentCurrentStats returns the most recent metrics for an agent.
+func (s *Service) GetAgentCurrentStats(ctx context.Context, agentID string) (*store.AgentCurrentStats, error) {
+	return s.store.GetAgentCurrentStats(ctx, agentID)
+}
+
+// GetFleetOverview returns aggregated stats for all agents.
+func (s *Service) GetFleetOverview(ctx context.Context) (*store.FleetOverview, error) {
+	return s.store.GetFleetOverview(ctx)
+}
+
+// GetAllAgentsCurrentStats returns current stats for all active agents.
+func (s *Service) GetAllAgentsCurrentStats(ctx context.Context) ([]store.AgentCurrentStats, error) {
+	return s.store.GetAllAgentsCurrentStats(ctx)
+}
+
 // =============================================================================
 // TARGET OPERATIONS
 // =============================================================================
@@ -491,6 +589,11 @@ func (s *Service) CreateTarget(ctx context.Context, req CreateTargetRequest) (*t
 // ListTargets returns all targets.
 func (s *Service) ListTargets(ctx context.Context) ([]types.Target, error) {
 	return s.store.ListTargets(ctx)
+}
+
+// ListTargetsPaginated returns targets with pagination and filtering.
+func (s *Service) ListTargetsPaginated(ctx context.Context, params store.TargetListParams) (*store.TargetListResult, error) {
+	return s.store.ListTargetsPaginated(ctx, params)
 }
 
 // GetTarget returns a single target.
@@ -546,9 +649,21 @@ func (s *Service) IngestResults(ctx context.Context, batch types.ResultBatch) er
 		batch.Results[i].AgentID = batch.AgentID
 	}
 
-	// Store the probe results
-	if err := s.store.InsertProbeResults(ctx, batch.Results); err != nil {
-		return err
+	// Store probe results - use Redis buffer if available, otherwise direct DB write
+	if s.resultBuffer != nil {
+		// Push to Redis buffer for async DB write
+		if err := s.resultBuffer.Push(ctx, batch.Results); err != nil {
+			s.logger.Error("failed to push results to buffer", "error", err)
+			// Fall back to direct DB write
+			if err := s.store.InsertProbeResults(ctx, batch.Results); err != nil {
+				return err
+			}
+		}
+	} else {
+		// Direct DB write (no Redis buffer configured)
+		if err := s.store.InsertProbeResults(ctx, batch.Results); err != nil {
+			return err
+		}
 	}
 
 	// Process state transitions based on probe results

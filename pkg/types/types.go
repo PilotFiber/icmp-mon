@@ -186,7 +186,9 @@ type Subnet struct {
 	POPName         *string `json:"pop_name,omitempty"`
 
 	// Network topology
-	GatewayDevice *string `json:"gateway_device,omitempty"` // CSW or other gateway device
+	GatewayDevice  *string `json:"gateway_device,omitempty"`   // CSW or other gateway device
+	SubnetType     *int    `json:"subnet_type,omitempty"`      // 0=NA, 1=WAN, 2=LAN
+	SubnetTypeName *string `json:"subnet_type_name,omitempty"` // "WAN", "LAN", "NA"
 
 	// Lifecycle
 	State         string     `json:"state"` // "active" | "archived"
@@ -375,6 +377,10 @@ type Agent struct {
 	LastHeartbeat time.Time   `json:"last_heartbeat"`
 
 	CreatedAt time.Time `json:"created_at"`
+
+	// Archive support (soft-delete)
+	ArchivedAt    *time.Time `json:"archived_at,omitempty"`
+	ArchiveReason *string    `json:"archive_reason,omitempty"`
 }
 
 // AgentStatus represents the health state of an agent.

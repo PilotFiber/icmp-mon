@@ -510,6 +510,9 @@ export function TargetDetail() {
   const [mtrResult, setMtrResult] = useState(null);
   const [showAgentSelector, setShowAgentSelector] = useState(false);
   const [selectedAgents, setSelectedAgents] = useState([]);
+  const [editingDescription, setEditingDescription] = useState(false);
+  const [descriptionValue, setDescriptionValue] = useState('');
+  const [savingDescription, setSavingDescription] = useState(false);
 
   const fetchTarget = async () => {
     try {
@@ -620,6 +623,38 @@ export function TargetDetail() {
     }
   };
 
+  const handleSaveDescription = async () => {
+    if (!target) return;
+    setSavingDescription(true);
+    try {
+      const newTags = { ...target.tags, description: descriptionValue };
+      await endpoints.updateTarget(target.id, { tags: newTags });
+      setTarget(prev => ({ ...prev, tags: newTags }));
+      setEditingDescription(false);
+    } catch (err) {
+      console.error('Failed to save description:', err);
+      alert('Failed to save description: ' + err.message);
+    } finally {
+      setSavingDescription(false);
+    }
+  };
+
+  const startEditingDescription = () => {
+    setDescriptionValue(target?.tags?.description || '');
+    setEditingDescription(true);
+  };
+
+  const cancelEditingDescription = () => {
+    setEditingDescription(false);
+    setDescriptionValue('');
+  };
+
+  // Get the display name with description as highest priority
+  const getDisplayName = () => {
+    if (!target) return 'No name';
+    return target.tags?.description || target.tags?.subscriber || target.tags?.device || target.tags?.subscriber_name || target.subscriber_id || 'No name';
+  };
+
   const getStatusColor = (s) => {
     switch (s) {
       case 'healthy': return 'healthy';
@@ -694,7 +729,49 @@ export function TargetDetail() {
                 <StatusBadge status={getStatusColor(status?.status)} label={status?.status || 'unknown'} />
                 {hasExpectedOutcome && <span className="text-xs px-1.5 py-0.5 bg-surface-tertiary text-theme-muted rounded">Expected Fail</span>}
               </div>
-              <p className="text-theme-muted">{target.tags?.device || target.tags?.subscriber_name || target.subscriber_id || 'No name'}</p>
+              {editingDescription ? (
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={descriptionValue}
+                    onChange={(e) => setDescriptionValue(e.target.value)}
+                    placeholder="Enter description..."
+                    autoFocus
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') handleSaveDescription();
+                      if (e.key === 'Escape') cancelEditingDescription();
+                    }}
+                    className="px-2 py-1 bg-surface-primary border border-pilot-cyan rounded text-theme-primary placeholder-theme-muted focus:outline-none text-sm min-w-[200px]"
+                  />
+                  <button
+                    onClick={handleSaveDescription}
+                    disabled={savingDescription}
+                    className="text-status-healthy hover:text-status-healthy/80 disabled:opacity-50"
+                  >
+                    <Check className="w-4 h-4" />
+                  </button>
+                  <button
+                    onClick={cancelEditingDescription}
+                    disabled={savingDescription}
+                    className="text-theme-muted hover:text-pilot-red"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2 group">
+                  <p className={`${getDisplayName() === 'No name' ? 'text-theme-muted italic' : 'text-theme-muted'}`}>
+                    {getDisplayName()}
+                  </p>
+                  <button
+                    onClick={startEditingDescription}
+                    className="text-theme-muted hover:text-pilot-cyan opacity-0 group-hover:opacity-100 transition-opacity"
+                    title="Edit description"
+                  >
+                    <Edit2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              )}
             </div>
             <div className="flex gap-2">
               <div className="relative">

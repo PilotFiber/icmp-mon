@@ -7,6 +7,7 @@
 #
 # Services:
 #   - timescaledb: PostgreSQL with TimescaleDB extension
+#   - redis: Write-ahead buffer for probe results
 #   - control-plane: API server (build from source)
 #   - agent-*: Multiple regional agents (build from source)
 
@@ -26,8 +27,45 @@ services:
     volumes:
       - timescaledb_data:/var/lib/postgresql/data
       - ../db/migrations:/docker-entrypoint-initdb.d:ro
+    # Performance tuning for write-heavy workload
+    command:
+      - "postgres"
+      - "-c"
+      - "shared_buffers=512MB"
+      - "-c"
+      - "work_mem=64MB"
+      - "-c"
+      - "maintenance_work_mem=256MB"
+      - "-c"
+      - "effective_cache_size=2GB"
+      - "-c"
+      - "synchronous_commit=off"
+      - "-c"
+      - "wal_buffers=16MB"
+      - "-c"
+      - "checkpoint_completion_target=0.9"
+      - "-c"
+      - "max_wal_size=2GB"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U icmpmon"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ==========================================================================
+  # REDIS - Write-ahead buffer for probe results
+  # ==========================================================================
+  redis:
+    image: redis:7-alpine
+    container_name: icmpmon-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    # Enable AOF persistence for durability
+    command: redis-server --appendonly yes --appendfsync everysec
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -42,14 +80,20 @@ services:
     container_name: icmpmon-control-plane
     environment:
       ICMPMON_DATABASE_URL: postgres://icmpmon:icmpmon@timescaledb:5432/icmpmon?sslmode=disable
+      ICMPMON_REDIS_URL: redis://redis:6379
       ICMPMON_DEBUG: "true"
       # 1Password Service Account for SSH key management
       OP_SERVICE_ACCOUNT_TOKEN: ${OP_SERVICE_ACCOUNT_TOKEN}
       OP_VAULT: ${OP_VAULT:-icmp-mon keys}
+      # Flight Deck (Pilot) Network Resource API for subnet import
+      FD_API_URL: ${FD_API_URL}
+      FD_BEARER: ${FD_BEARER}
     ports:
       - "8081:8080"
     depends_on:
       timescaledb:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     restart: unless-stopped
 
@@ -145,6 +189,7 @@ services:
 
 volumes:
   timescaledb_data:
+  redis_data:
 
 networks:
   default:

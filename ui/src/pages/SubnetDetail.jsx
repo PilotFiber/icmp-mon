@@ -435,7 +435,7 @@ export function SubnetDetail() {
                 <div className="text-xs text-theme-muted mb-1">IDs</div>
                 <div className="text-xs space-y-1">
                   {subnet.pilot_subnet_id && (
-                    <div><span className="text-theme-muted">Pilot:</span> <span className="text-theme-primary">{subnet.pilot_subnet_id}</span></div>
+                    <div><span className="text-theme-muted">Subnet:</span> <span className="text-theme-primary">{subnet.pilot_subnet_id}</span></div>
                   )}
                   {subnet.vlan_id && (
                     <div><span className="text-theme-muted">VLAN:</span> <span className="text-theme-primary">{subnet.vlan_id}</span></div>

@@ -5,6 +5,7 @@ import (
 	"strconv"
 
 	"github.com/pilot-net/icmp-mon/control-plane/internal/service"
+	"github.com/pilot-net/icmp-mon/control-plane/internal/store"
 	"github.com/pilot-net/icmp-mon/pkg/types"
 )
 
@@ -13,7 +14,51 @@ import (
 // =============================================================================
 
 func (s *Server) handleListSubnets(w http.ResponseWriter, r *http.Request) {
-	includeArchived := r.URL.Query().Get("include_archived") == "true"
+	query := r.URL.Query()
+
+	// Check if pagination is requested
+	limitStr := query.Get("limit")
+	offsetStr := query.Get("offset")
+
+	// If pagination params present, use paginated endpoint
+	if limitStr != "" || offsetStr != "" {
+		params := store.SubnetListParams{
+			POPName:         query.Get("pop"),
+			City:            query.Get("city"),
+			Region:          query.Get("region"),
+			Search:          query.Get("search"),
+			IncludeArchived: query.Get("include_archived") == "true",
+		}
+
+		if limitStr != "" {
+			if limit, err := strconv.Atoi(limitStr); err == nil {
+				params.Limit = limit
+			}
+		}
+		if offsetStr != "" {
+			if offset, err := strconv.Atoi(offsetStr); err == nil {
+				params.Offset = offset
+			}
+		}
+		if subIDStr := query.Get("subscriber_id"); subIDStr != "" {
+			if subID, err := strconv.Atoi(subIDStr); err == nil {
+				params.SubscriberID = &subID
+			}
+		}
+
+		result, err := s.svc.ListSubnetsPaginated(r.Context(), params)
+		if err != nil {
+			s.logger.Error("list subnets paginated failed", "error", err)
+			s.writeError(w, http.StatusInternalServerError, "failed to list subnets")
+			return
+		}
+
+		s.writeJSON(w, http.StatusOK, result)
+		return
+	}
+
+	// Legacy: return all subnets
+	includeArchived := query.Get("include_archived") == "true"
 
 	var subnets []types.Subnet
 	var err error
@@ -483,6 +528,23 @@ func (s *Server) handleDeleteTarget(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, map[string]string{
 		"status":  "archived",
 		"message": "target archived successfully",
+	})
+}
+
+// =============================================================================
+// TARGET TAG ENDPOINTS
+// =============================================================================
+
+func (s *Server) handleGetTargetTagKeys(w http.ResponseWriter, r *http.Request) {
+	keys, err := s.svc.GetTargetTagKeys(r.Context())
+	if err != nil {
+		s.logger.Error("get target tag keys failed", "error", err)
+		s.writeError(w, http.StatusInternalServerError, "failed to get target tag keys")
+		return
+	}
+
+	s.writeJSON(w, http.StatusOK, map[string]any{
+		"keys": keys,
 	})
 }
 

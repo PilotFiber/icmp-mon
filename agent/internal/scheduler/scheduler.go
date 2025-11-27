@@ -209,32 +209,62 @@ func (s *Scheduler) executeTierProbes(ctx context.Context, tierName string, tier
 		}
 	}
 
-	// Execute in batches
+	// Execute in batches concurrently
 	caps := exec.Capabilities()
 	batchSize := caps.MaxBatchSize
 	if batchSize <= 0 || !caps.SupportsBatching {
 		batchSize = 1
 	}
 
-	var allResults []*executor.Result
-
+	// Split targets into batches
+	var batches [][]executor.ProbeTarget
 	for i := 0; i < len(targets); i += batchSize {
 		end := i + batchSize
 		if end > len(targets) {
 			end = len(targets)
 		}
-		batch := targets[i:end]
+		batches = append(batches, targets[i:end])
+	}
 
-		results, err := exec.ExecuteBatch(ctx, batch)
-		if err != nil {
-			s.logger.Error("batch execution failed",
-				"tier", tierName,
-				"error", err,
-				"batch_start", i,
-				"batch_size", len(batch))
-			continue
-		}
+	// Execute batches concurrently with a limit to avoid overwhelming the system
+	maxConcurrent := 10 // Run up to 10 fping processes in parallel
+	if len(batches) < maxConcurrent {
+		maxConcurrent = len(batches)
+	}
 
+	resultsChan := make(chan []*executor.Result, len(batches))
+	sem := make(chan struct{}, maxConcurrent)
+
+	var wg sync.WaitGroup
+	for i, batch := range batches {
+		wg.Add(1)
+		go func(batchNum int, batchTargets []executor.ProbeTarget) {
+			defer wg.Done()
+			sem <- struct{}{}        // Acquire semaphore
+			defer func() { <-sem }() // Release semaphore
+
+			results, err := exec.ExecuteBatch(ctx, batchTargets)
+			if err != nil {
+				s.logger.Error("batch execution failed",
+					"tier", tierName,
+					"error", err,
+					"batch_num", batchNum,
+					"batch_size", len(batchTargets))
+				return
+			}
+			resultsChan <- results
+		}(i, batch)
+	}
+
+	// Wait for all batches to complete then close the channel
+	go func() {
+		wg.Wait()
+		close(resultsChan)
+	}()
+
+	// Collect all results
+	var allResults []*executor.Result
+	for results := range resultsChan {
 		allResults = append(allResults, results...)
 	}
 

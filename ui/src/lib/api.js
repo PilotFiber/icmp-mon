@@ -68,12 +68,28 @@ export const endpoints = {
   // Agents
   listAgents: () => api.get('/agents'),
   getAgent: (id) => api.get(`/agents/${id}`),
-  getAgentMetrics: (id) => api.get(`/agents/${id}/metrics`),
+  updateAgent: (id, data) => api.put(`/agents/${id}`, data),
+  getAgentMetrics: (id, duration = '1h') => api.get(`/agents/${id}/metrics?duration=${duration}`),
+  getAgentStats: (id) => api.get(`/agents/${id}/stats`),
+  archiveAgent: (id, reason = '') => api.post(`/agents/${id}/archive`, { reason }),
+  unarchiveAgent: (id) => api.post(`/agents/${id}/unarchive`),
+
+  // Fleet overview
+  getFleetOverview: () => api.get('/fleet/overview'),
+  getAllAgentsStats: () => api.get('/fleet/agents/stats'),
 
   // Targets
   listTargets: (params = {}) => {
     const query = new URLSearchParams(params).toString();
     return api.get(`/targets${query ? `?${query}` : ''}`);
+  },
+  listTargetsPaginated: ({ limit = 50, offset = 0, tier = '', state = '', search = '', includeArchived = false } = {}) => {
+    const params = new URLSearchParams({ limit, offset });
+    if (tier) params.set('tier', tier);
+    if (state) params.set('state', state);
+    if (search) params.set('search', search);
+    if (includeArchived) params.set('include_archived', 'true');
+    return api.get(`/targets?${params.toString()}`);
   },
   getTarget: (id) => api.get(`/targets/${id}`),
   getTargetStatus: (id) => api.get(`/targets/${id}/status`),
@@ -187,6 +203,15 @@ export const endpoints = {
 
   // Subnets
   listSubnets: (includeArchived = true) => api.get(`/subnets?include_archived=${includeArchived}`),
+  listSubnetsPaginated: ({ limit = 50, offset = 0, pop = '', city = '', region = '', search = '', includeArchived = true } = {}) => {
+    const params = new URLSearchParams({ limit, offset });
+    if (pop) params.set('pop', pop);
+    if (city) params.set('city', city);
+    if (region) params.set('region', region);
+    if (search) params.set('search', search);
+    if (includeArchived) params.set('include_archived', 'true');
+    return api.get(`/subnets?${params.toString()}`);
+  },
   getSubnet: (id) => api.get(`/subnets/${id}`),
   getSubnetTargets: (id) => api.get(`/subnets/${id}/targets`),
   getSubnetStats: (id) => api.get(`/subnets/${id}/stats`),
@@ -211,4 +236,7 @@ export const endpoints = {
   },
   getTargetActivity: (id, limit = 50) => api.get(`/targets/${id}/activity?limit=${limit}`),
   getSubnetActivity: (id, limit = 50) => api.get(`/subnets/${id}/activity?limit=${limit}`),
+
+  // Target tags (for metrics explorer)
+  getTargetTagKeys: () => api.get('/targets/tag-keys'),
 };

@@ -100,7 +100,7 @@ type SeedSubnetTargetsResult struct {
 
 // SeedSubnetTargets creates auto-discovery targets for a subnet.
 // This creates:
-// 1. A gateway target (if gateway_address is specified)
+// 1. A gateway target (if gateway_address is specified, or auto-computed for /31)
 // 2. Customer targets for all usable IPs in the subnet range
 //
 // All targets start in UNKNOWN state and will be discovered via probing.
@@ -115,11 +115,29 @@ func (s *Service) SeedSubnetTargets(ctx context.Context, subnetID string) (*Seed
 
 	result := &SeedSubnetTargetsResult{}
 
-	// 1. Create gateway target if gateway_address is specified
+	// For /31 networks, auto-compute gateway if not set
+	// Lower IP is gateway (ISP side), upper IP is customer
+	gatewayIP := ""
 	if subnet.GatewayAddress != nil && *subnet.GatewayAddress != "" {
+		gatewayIP = *subnet.GatewayAddress
+	} else if subnet.NetworkSize == 31 {
+		// Auto-compute gateway for /31: lower IP (network address)
+		_, network, err := net.ParseCIDR(subnet.NetworkAddress)
+		if err == nil && network.IP.To4() != nil {
+			gatewayIP = network.IP.String()
+			s.logger.Info("auto-computed gateway for /31 subnet",
+				"subnet_id", subnetID,
+				"network", subnet.NetworkAddress,
+				"gateway", gatewayIP,
+			)
+		}
+	}
+
+	// 1. Create gateway target if we have a gateway address
+	if gatewayIP != "" {
 		err := s.store.CreateAutoTarget(ctx, store.AutoTargetParams{
 			ID:              uuid.New().String(),
-			IP:              *subnet.GatewayAddress,
+			IP:              gatewayIP,
 			SubnetID:        subnetID,
 			IPType:          types.IPTypeGateway,
 			Tier:            "infrastructure", // Gateways get infrastructure tier
@@ -130,11 +148,11 @@ func (s *Service) SeedSubnetTargets(ctx context.Context, subnetID string) (*Seed
 			Tags:            map[string]string{"auto_seeded": "true", "subnet": subnet.NetworkAddress},
 		})
 		if err != nil {
-			result.Errors = append(result.Errors, fmt.Sprintf("gateway %s: %v", *subnet.GatewayAddress, err))
+			result.Errors = append(result.Errors, fmt.Sprintf("gateway %s: %v", gatewayIP, err))
 		} else {
 			result.GatewayCreated = true
 			s.logger.Debug("created gateway target",
-				"ip", *subnet.GatewayAddress,
+				"ip", gatewayIP,
 				"subnet_id", subnetID,
 			)
 		}
@@ -204,24 +222,32 @@ func calculateUsableIPs(subnet *types.Subnet) ([]string, error) {
 		return []string{}, nil
 	}
 	if maskSize == 31 {
-		// /31 - point-to-point link, both IPs are usable
-		var ips []string
+		// /31 - point-to-point link (RFC 3021)
+		// Lower IP (.0) is gateway (ISP side)
+		// Upper IP (.1) is customer (to be monitored)
 		ip := network.IP.To4()
 		if ip == nil {
 			return nil, fmt.Errorf("only IPv4 supported")
 		}
-		for i := 0; i < 2; i++ {
-			currentIP := make(net.IP, 4)
-			copy(currentIP, ip)
-			currentIP[3] += byte(i)
-			ipStr := currentIP.String()
-			// Exclude gateway
-			if gatewayIP != nil && currentIP.Equal(gatewayIP) {
-				continue
-			}
-			ips = append(ips, ipStr)
+
+		// If no gateway is set, auto-compute: lower IP is gateway, upper IP is customer
+		if gatewayIP == nil {
+			// Set gateway to lower IP (network address for /31)
+			gatewayIP = make(net.IP, 4)
+			copy(gatewayIP, ip)
 		}
-		return ips, nil
+
+		// Return only the upper IP (customer)
+		customerIP := make(net.IP, 4)
+		copy(customerIP, ip)
+		customerIP[3] += 1
+
+		// If the upper IP happens to be the gateway (unusual), return the lower
+		if gatewayIP.Equal(customerIP) {
+			return []string{ip.String()}, nil
+		}
+
+		return []string{customerIP.String()}, nil
 	}
 
 	// Standard subnet: exclude network, broadcast, and gateway
@@ -276,6 +302,11 @@ func (s *Service) ListSubnets(ctx context.Context) ([]types.Subnet, error) {
 // ListSubnetsIncludeArchived returns all subnets including archived ones.
 func (s *Service) ListSubnetsIncludeArchived(ctx context.Context) ([]types.Subnet, error) {
 	return s.store.ListSubnetsIncludeArchived(ctx)
+}
+
+// ListSubnetsPaginated returns subnets with pagination and filtering.
+func (s *Service) ListSubnetsPaginated(ctx context.Context, params store.SubnetListParams) (*store.SubnetListResult, error) {
+	return s.store.ListSubnetsPaginated(ctx, params)
 }
 
 // ListSubnetsBySubscriber returns subnets for a specific subscriber.
@@ -397,6 +428,11 @@ func (s *Service) ListTargetsBySubnet(ctx context.Context, subnetID string) ([]t
 // ListTargetsNeedingReview returns targets that need human review.
 func (s *Service) ListTargetsNeedingReview(ctx context.Context) ([]types.TargetEnriched, error) {
 	return s.store.ListTargetsNeedingReview(ctx)
+}
+
+// GetTargetTagKeys returns distinct tag keys from all active targets.
+func (s *Service) GetTargetTagKeys(ctx context.Context) ([]string, error) {
+	return s.store.GetDistinctTargetTagKeys(ctx)
 }
 
 // =============================================================================

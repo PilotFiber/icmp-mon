@@ -7,10 +7,16 @@ import {
   ChevronRight,
   AlertTriangle,
   Plus,
+  Target,
+  Zap,
+  Database,
+  Cpu,
+  HardDrive,
+  Activity,
 } from 'lucide-react';
 
 import { PageHeader, PageContent } from '../components/Layout';
-import { Card } from '../components/Card';
+import { Card, CardTitle, CardContent } from '../components/Card';
 import { MetricCard } from '../components/MetricCard';
 import { StatusBadge } from '../components/StatusBadge';
 import { Button } from '../components/Button';
@@ -38,6 +44,7 @@ const statuses = [
 export function Agents() {
   const navigate = useNavigate();
   const [agents, setAgents] = useState([]);
+  const [fleetOverview, setFleetOverview] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [search, setSearch] = useState('');
@@ -50,8 +57,12 @@ export function Agents() {
     try {
       setLoading(true);
       setError(null);
-      const res = await endpoints.listAgents();
-      setAgents(res.agents || []);
+      const [agentsRes, overviewRes] = await Promise.all([
+        endpoints.listAgents(),
+        endpoints.getFleetOverview().catch(() => null),
+      ]);
+      setAgents(agentsRes.agents || []);
+      setFleetOverview(overviewRes);
     } catch (err) {
       console.error('Failed to fetch agents:', err);
       setError(err.message);
@@ -175,6 +186,89 @@ export function Agents() {
             status={stats.offline > 0 ? 'down' : 'healthy'}
           />
         </div>
+
+        {/* Fleet Overview */}
+        {fleetOverview && (
+          <Card className="mb-6">
+            <CardTitle icon={Activity}>Fleet Operations</CardTitle>
+            <CardContent>
+              <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
+                <div className="bg-surface-primary rounded-lg p-4">
+                  <div className="flex items-center gap-2 text-theme-muted text-xs mb-1">
+                    <Target className="w-3 h-3" />
+                    Total Targets
+                  </div>
+                  <div className="text-2xl font-semibold text-theme-primary">
+                    {fleetOverview.total_targets?.toLocaleString() || 0}
+                  </div>
+                  <div className="text-xs text-theme-muted mt-1">
+                    {fleetOverview.total_active_targets?.toLocaleString() || 0} active
+                  </div>
+                </div>
+                <div className="bg-surface-primary rounded-lg p-4">
+                  <div className="flex items-center gap-2 text-theme-muted text-xs mb-1">
+                    <Zap className="w-3 h-3" />
+                    Probes/sec
+                  </div>
+                  <div className="text-2xl font-semibold text-theme-primary">
+                    {fleetOverview.total_probes_per_second?.toFixed(1) || 0}
+                  </div>
+                  <div className="text-xs text-theme-muted mt-1">
+                    fleet-wide
+                  </div>
+                </div>
+                <div className="bg-surface-primary rounded-lg p-4">
+                  <div className="flex items-center gap-2 text-theme-muted text-xs mb-1">
+                    <Database className="w-3 h-3" />
+                    Results Queued
+                  </div>
+                  <div className="text-2xl font-semibold text-theme-primary">
+                    {fleetOverview.total_results_queued?.toLocaleString() || 0}
+                  </div>
+                  <div className="text-xs text-theme-muted mt-1">
+                    pending delivery
+                  </div>
+                </div>
+                <div className="bg-surface-primary rounded-lg p-4">
+                  <div className="flex items-center gap-2 text-theme-muted text-xs mb-1">
+                    <Cpu className="w-3 h-3" />
+                    Avg CPU
+                  </div>
+                  <div className="text-2xl font-semibold text-theme-primary">
+                    {fleetOverview.avg_cpu_percent?.toFixed(1) || 0}%
+                  </div>
+                  <div className="text-xs text-theme-muted mt-1">
+                    across agents
+                  </div>
+                </div>
+                <div className="bg-surface-primary rounded-lg p-4">
+                  <div className="flex items-center gap-2 text-theme-muted text-xs mb-1">
+                    <HardDrive className="w-3 h-3" />
+                    Avg Memory
+                  </div>
+                  <div className="text-2xl font-semibold text-theme-primary">
+                    {fleetOverview.avg_memory_mb?.toFixed(1) || 0} MB
+                  </div>
+                  <div className="text-xs text-theme-muted mt-1">
+                    per agent
+                  </div>
+                </div>
+                <div className="bg-surface-primary rounded-lg p-4">
+                  <div className="flex items-center gap-2 text-theme-muted text-xs mb-1">
+                    <Server className="w-3 h-3" />
+                    Active Agents
+                  </div>
+                  <div className="text-2xl font-semibold text-pilot-cyan">
+                    {fleetOverview.active_agents || 0}
+                  </div>
+                  <div className="text-xs text-theme-muted mt-1">
+                    of {fleetOverview.total_agents || 0} total
+                  </div>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         {/* Filters */}
         <Card className="mb-6">

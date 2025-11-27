@@ -23,7 +23,9 @@ import (
 	"time"
 
 	"github.com/pilot-net/icmp-mon/control-plane/internal/api"
+	"github.com/pilot-net/icmp-mon/control-plane/internal/buffer"
 	"github.com/pilot-net/icmp-mon/control-plane/internal/enrollment"
+	"github.com/pilot-net/icmp-mon/control-plane/internal/pilot"
 	"github.com/pilot-net/icmp-mon/control-plane/internal/rollout"
 	"github.com/pilot-net/icmp-mon/control-plane/internal/secrets"
 	"github.com/pilot-net/icmp-mon/control-plane/internal/service"
@@ -85,6 +87,28 @@ func main() {
 	svc := service.NewService(db, logger)
 	apiServer := api.NewServer(svc, logger)
 
+	// Initialize Redis buffer for probe results (optional - only if Redis URL is configured)
+	var resultBuffer *buffer.ResultBuffer
+	var bufferFlusher *buffer.Flusher
+	redisURL := os.Getenv("ICMPMON_REDIS_URL")
+	if redisURL != "" {
+		var err error
+		resultBuffer, err = buffer.NewResultBuffer(redisURL, logger)
+		if err != nil {
+			logger.Warn("redis buffer disabled - connection failed", "error", err)
+		} else {
+			// Set buffer on service
+			svc.SetResultBuffer(resultBuffer)
+
+			// Start background flusher
+			bufferFlusher = buffer.NewFlusher(resultBuffer, db.Pool(), logger)
+			bufferFlusher.Start()
+			logger.Info("redis buffer enabled", "redis_url", redisURL)
+		}
+	} else {
+		logger.Info("redis buffer disabled - ICMPMON_REDIS_URL not set")
+	}
+
 	// Initialize enrollment service (optional - only if secrets backend is configured)
 	keyStore, err := secrets.NewKeyStore(secrets.ConfigFromEnv(), logger)
 	if err != nil {
@@ -135,6 +159,53 @@ func main() {
 	assignmentHandler.RegisterRoutes(apiServer.Mux())
 	logger.Info("assignment management enabled")
 
+	// Initialize evaluator worker to populate agent_target_state from probe results
+	evaluatorStoreAdapter := &storeEvaluatorAdapter{db: db}
+	evaluatorWorker := worker.NewEvaluatorWorker(
+		evaluatorStoreAdapter,
+		worker.DefaultEvaluatorWorkerConfig(),
+		logger,
+	)
+	evaluatorWorker.Start(context.Background())
+	defer evaluatorWorker.Stop()
+	logger.Info("evaluator worker started")
+
+	// Initialize alert worker for evolving alerts and incident correlation
+	alertStoreAdapter := &storeAlertAdapter{db: db}
+	alertWorker := worker.NewAlertWorker(
+		alertStoreAdapter,
+		alertStoreAdapter, // Store implements both AlertStore and IncidentStore interfaces
+		worker.DefaultAlertWorkerConfig(),
+		logger,
+	)
+	alertWorker.Start(context.Background())
+	defer alertWorker.Stop()
+	logger.Info("alert worker started")
+
+	// Initialize Pilot sync worker (optional - only if API credentials are configured)
+	fdAPIURL := os.Getenv("FD_API_URL")
+	fdBearer := os.Getenv("FD_BEARER")
+	if fdAPIURL != "" && fdBearer != "" {
+		pilotClient := pilot.NewClient(pilot.Config{
+			BaseURL:    fdAPIURL,
+			AuthToken:  fdBearer,
+			MaxSubnets: 0, // 0 = unlimited
+		}, logger)
+
+		pilotSyncStore := &storePilotSyncAdapter{db: db}
+		pilotSyncWorker := worker.NewPilotSyncWorker(
+			pilotClient,
+			pilotSyncStore,
+			worker.DefaultPilotSyncConfig(),
+			logger,
+		)
+		pilotSyncWorker.Start(context.Background())
+		defer pilotSyncWorker.Stop()
+		logger.Info("pilot sync worker started", "max_subnets", "unlimited")
+	} else {
+		logger.Info("pilot sync disabled - FD_API_URL and FD_BEARER not set")
+	}
+
 	// Create HTTP server
 	server := &http.Server{
 		Addr:         fmt.Sprintf(":%d", *port),
@@ -159,6 +230,16 @@ func main() {
 	<-sigCh
 
 	logger.Info("shutting down")
+
+	// Stop buffer flusher first (flushes remaining data)
+	if bufferFlusher != nil {
+		bufferFlusher.Stop()
+	}
+
+	// Close Redis connection
+	if resultBuffer != nil {
+		resultBuffer.Close()
+	}
 
 	// Graceful shutdown
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -512,4 +593,161 @@ func (a *storeStateAdapter) SetTargetTier(ctx context.Context, targetID, tier st
 
 func (a *storeStateAdapter) SetTargetBaseline(ctx context.Context, targetID string) error {
 	return a.db.SetTargetBaseline(ctx, targetID)
+}
+
+// =============================================================================
+// PILOT SYNC STORE ADAPTER
+// =============================================================================
+
+// storePilotSyncAdapter implements worker.PilotSyncStore using store.Store.
+type storePilotSyncAdapter struct {
+	db *store.Store
+}
+
+func (a *storePilotSyncAdapter) GetSubnetByPilotID(ctx context.Context, pilotID int) (*types.Subnet, error) {
+	return a.db.GetSubnetByPilotID(ctx, pilotID)
+}
+
+func (a *storePilotSyncAdapter) CreateSubnet(ctx context.Context, subnet *types.Subnet) error {
+	return a.db.CreateSubnet(ctx, subnet)
+}
+
+func (a *storePilotSyncAdapter) UpdateSubnet(ctx context.Context, subnet *types.Subnet) error {
+	return a.db.UpdateSubnet(ctx, subnet)
+}
+
+func (a *storePilotSyncAdapter) ArchiveSubnet(ctx context.Context, id, reason string, archiveAutoTargets bool) error {
+	return a.db.ArchiveSubnet(ctx, id, reason, archiveAutoTargets)
+}
+
+func (a *storePilotSyncAdapter) ListSubnets(ctx context.Context) ([]types.Subnet, error) {
+	return a.db.ListSubnets(ctx)
+}
+
+func (a *storePilotSyncAdapter) CreateTargetForSubnet(ctx context.Context, target *types.Target) error {
+	return a.db.CreateTarget(ctx, target)
+}
+
+func (a *storePilotSyncAdapter) CreateAutoTarget(ctx context.Context, params store.AutoTargetParams) error {
+	return a.db.CreateAutoTarget(ctx, params)
+}
+
+func (a *storePilotSyncAdapter) UpdateTargetTagsBySubnet(ctx context.Context, subnetID string, tags map[string]string) error {
+	return a.db.UpdateTargetTagsBySubnet(ctx, subnetID, tags)
+}
+
+// =============================================================================
+// ALERT WORKER STORE ADAPTER
+// =============================================================================
+
+// storeAlertAdapter implements worker.AlertStore and worker.IncidentStore using store.Store.
+type storeAlertAdapter struct {
+	db *store.Store
+}
+
+// AlertStore interface
+func (a *storeAlertAdapter) GetCurrentAnomalies(ctx context.Context, lookback time.Duration) ([]types.Anomaly, error) {
+	return a.db.GetCurrentAnomalies(ctx, lookback)
+}
+
+func (a *storeAlertAdapter) GetHealthyTargetsWithActiveAlerts(ctx context.Context, requiredHealthyProbes int) ([]string, error) {
+	return a.db.GetHealthyTargetsWithActiveAlerts(ctx, requiredHealthyProbes)
+}
+
+func (a *storeAlertAdapter) CreateAlert(ctx context.Context, alert *types.Alert) error {
+	return a.db.CreateAlert(ctx, alert)
+}
+
+func (a *storeAlertAdapter) GetAlert(ctx context.Context, id string) (*types.Alert, error) {
+	return a.db.GetAlert(ctx, id)
+}
+
+func (a *storeAlertAdapter) ListAlerts(ctx context.Context, filter types.AlertFilter) ([]types.Alert, error) {
+	return a.db.ListAlerts(ctx, filter)
+}
+
+func (a *storeAlertAdapter) FindActiveAlertForTarget(ctx context.Context, targetID string, alertType types.AlertType, agentID string) (*types.Alert, error) {
+	return a.db.FindActiveAlertForTarget(ctx, targetID, alertType, agentID)
+}
+
+func (a *storeAlertAdapter) GetActiveAlertsForTarget(ctx context.Context, targetID string) ([]types.Alert, error) {
+	return a.db.GetActiveAlertsForTarget(ctx, targetID)
+}
+
+func (a *storeAlertAdapter) EscalateAlert(ctx context.Context, alertID string, newSeverity types.AlertSeverity, latencyMs, packetLoss *float64, description string) error {
+	return a.db.EscalateAlert(ctx, alertID, newSeverity, latencyMs, packetLoss, description)
+}
+
+func (a *storeAlertAdapter) DeescalateAlert(ctx context.Context, alertID string, newSeverity types.AlertSeverity, latencyMs, packetLoss *float64, description string) error {
+	return a.db.DeescalateAlert(ctx, alertID, newSeverity, latencyMs, packetLoss, description)
+}
+
+func (a *storeAlertAdapter) ResolveAlert(ctx context.Context, alertID string, description string) error {
+	return a.db.ResolveAlert(ctx, alertID, description)
+}
+
+func (a *storeAlertAdapter) ReopenAlert(ctx context.Context, alertID string, newSeverity types.AlertSeverity, latencyMs, packetLoss *float64, description string) error {
+	return a.db.ReopenAlert(ctx, alertID, newSeverity, latencyMs, packetLoss, description)
+}
+
+func (a *storeAlertAdapter) UpdateAlertMetrics(ctx context.Context, alertID string, latencyMs, packetLoss *float64) error {
+	return a.db.UpdateAlertMetrics(ctx, alertID, latencyMs, packetLoss)
+}
+
+func (a *storeAlertAdapter) LinkAlertToIncident(ctx context.Context, alertID, incidentID string) error {
+	return a.db.LinkAlertToIncident(ctx, alertID, incidentID)
+}
+
+func (a *storeAlertAdapter) GetUnlinkedAlertsByCorrelation(ctx context.Context, correlationKey string, window time.Duration) ([]types.Alert, error) {
+	return a.db.GetUnlinkedAlertsByCorrelation(ctx, correlationKey, window)
+}
+
+func (a *storeAlertAdapter) GetAlertConfigInt(ctx context.Context, key string, defaultVal int) (int, error) {
+	return a.db.GetAlertConfigInt(ctx, key, defaultVal)
+}
+
+func (a *storeAlertAdapter) GetAlertConfigFloat(ctx context.Context, key string, defaultVal float64) (float64, error) {
+	return a.db.GetAlertConfigFloat(ctx, key, defaultVal)
+}
+
+// IncidentStore interface
+func (a *storeAlertAdapter) FindActiveIncidentIDByCorrelation(ctx context.Context, correlationKey string) (string, error) {
+	return a.db.FindActiveIncidentIDByCorrelation(ctx, correlationKey)
+}
+
+func (a *storeAlertAdapter) CreateIncidentFromAlerts(ctx context.Context, correlationKey string, alertIDs []string, severity string) (string, error) {
+	return a.db.CreateIncidentFromAlerts(ctx, correlationKey, alertIDs, severity)
+}
+
+// =============================================================================
+// EVALUATOR WORKER STORE ADAPTER
+// =============================================================================
+
+// storeEvaluatorAdapter implements worker.EvaluatorStore using store.Store.
+type storeEvaluatorAdapter struct {
+	db *store.Store
+}
+
+func (a *storeEvaluatorAdapter) GetActiveAgentTargetPairs(ctx context.Context, since time.Duration) ([]store.AgentTargetPair, error) {
+	return a.db.GetActiveAgentTargetPairs(ctx, since)
+}
+
+func (a *storeEvaluatorAdapter) BulkGetRecentProbeStats(ctx context.Context, pairs []store.AgentTargetPair, window time.Duration) (map[store.PairKey]*store.ProbeStats, error) {
+	return a.db.BulkGetRecentProbeStats(ctx, pairs, window)
+}
+
+func (a *storeEvaluatorAdapter) BulkGetBaselines(ctx context.Context, pairs []store.AgentTargetPair) (map[store.PairKey]*store.AgentTargetBaseline, error) {
+	return a.db.BulkGetBaselines(ctx, pairs)
+}
+
+func (a *storeEvaluatorAdapter) BulkGetAgentTargetStates(ctx context.Context, pairs []store.AgentTargetPair) (map[store.PairKey]*store.AgentTargetState, error) {
+	return a.db.BulkGetAgentTargetStates(ctx, pairs)
+}
+
+func (a *storeEvaluatorAdapter) BulkUpsertAgentTargetStates(ctx context.Context, states []*store.AgentTargetState) error {
+	return a.db.BulkUpsertAgentTargetStates(ctx, states)
+}
+
+func (a *storeEvaluatorAdapter) UpsertBaseline(ctx context.Context, baseline *store.AgentTargetBaseline) error {
+	return a.db.UpsertBaseline(ctx, baseline)
 }
