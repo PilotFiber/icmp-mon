@@ -34,6 +34,10 @@ Thumbs.db
 .env.*.local
 *.local
 
+# Deploy environment files (contain secrets)
+deploy/.env
+deploy/environments/*/.env
+
 # Logs
 *.log
 
@@ -52,3 +56,5 @@ ui/dist-ssr/
 # Build binaries
 control-plane/control-plane
 control-plane/icmp-control-plane
+control-plane/control-plane-linux
+deploy/control-plane

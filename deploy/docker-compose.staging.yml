@@ -1,0 +1,157 @@
+# ICMP-Mon Staging Deployment
+# Usage: docker compose -f docker-compose.staging.yml up -d --build
+#
+# Prerequisites:
+# 1. Copy .env.example to .env and fill in values
+# 2. Build UI: cd ../ui && npm install && npm run build
+# 3. Point DNS to this server for TLS to work
+
+services:
+  # ==========================================================================
+  # DATABASE - TimescaleDB (PostgreSQL with time-series extensions)
+  # ==========================================================================
+  timescaledb:
+    image: timescale/timescaledb:latest-pg16
+    container_name: icmpmon-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: icmpmon
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: icmpmon
+    ports:
+      - "127.0.0.1:5432:5432"  # Only localhost - not exposed externally
+    volumes:
+      - timescaledb_data:/var/lib/postgresql/data
+      - ../db/migrations:/docker-entrypoint-initdb.d:ro
+      - ./backups:/backups:rw
+    command:
+      - "postgres"
+      - "-c"
+      - "shared_buffers=1GB"
+      - "-c"
+      - "work_mem=64MB"
+      - "-c"
+      - "effective_cache_size=3GB"
+      - "-c"
+      - "maintenance_work_mem=256MB"
+      - "-c"
+      - "checkpoint_completion_target=0.9"
+      - "-c"
+      - "wal_buffers=64MB"
+      - "-c"
+      - "default_statistics_target=100"
+      - "-c"
+      - "random_page_cost=1.1"
+      - "-c"
+      - "effective_io_concurrency=200"
+      - "-c"
+      - "synchronous_commit=off"
+      - "-c"
+      - "max_connections=200"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U icmpmon"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - internal
+
+  # ==========================================================================
+  # CACHE - Redis for probe result buffering
+  # ==========================================================================
+  redis:
+    image: redis:7-alpine
+    container_name: icmpmon-redis
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6379:6379"  # Only localhost
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --appendfsync everysec --maxmemory 512mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - internal
+
+  # ==========================================================================
+  # CONTROL PLANE - API Server
+  # ==========================================================================
+  control-plane:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.control-plane
+    container_name: icmpmon-control-plane
+    restart: unless-stopped
+    environment:
+      ICMPMON_DATABASE_URL: postgres://icmpmon:${DB_PASSWORD}@timescaledb:5432/icmpmon?sslmode=disable
+      ICMPMON_REDIS_URL: redis://redis:6379
+      ICMPMON_DEBUG: "false"
+      # 1Password for agent enrollment (optional)
+      OP_SERVICE_ACCOUNT_TOKEN: ${OP_SERVICE_ACCOUNT_TOKEN:-}
+      OP_VAULT: ${OP_VAULT:-icmp-mon keys}
+      # Flight Deck subnet sync (optional)
+      FD_API_URL: ${FD_API_URL:-}
+      FD_BEARER: ${FD_BEARER:-}
+    expose:
+      - "8080"
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - internal
+      - proxy
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "5"
+
+  # ==========================================================================
+  # REVERSE PROXY - Caddy with automatic HTTPS
+  # ==========================================================================
+  caddy:
+    image: caddy:2-alpine
+    container_name: icmpmon-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN:-localhost}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+      - ../ui/dist:/srv/ui:ro
+    depends_on:
+      - control-plane
+    networks:
+      - proxy
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+
+volumes:
+  timescaledb_data:
+    name: icmpmon_timescaledb_data
+  redis_data:
+    name: icmpmon_redis_data
+  caddy_data:
+    name: icmpmon_caddy_data
+  caddy_config:
+    name: icmpmon_caddy_config
+
+networks:
+  internal:
+    name: icmpmon_internal
+    driver: bridge
+  proxy:
+    name: icmpmon_proxy
+    driver: bridge

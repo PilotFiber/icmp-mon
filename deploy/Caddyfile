@@ -1,0 +1,84 @@
+# ICMP-Mon Caddy Configuration
+# Provides automatic HTTPS via Let's Encrypt and reverse proxy to API
+#
+# The {$DOMAIN} variable is set from the DOMAIN environment variable
+# in docker-compose.staging.yml
+
+{$DOMAIN:localhost} {
+    # ==========================================================================
+    # API PROXY - Route /api/* requests to control plane
+    # ==========================================================================
+    handle /api/* {
+        reverse_proxy control-plane:8080 {
+            # Health checks
+            health_uri /api/v1/health
+            health_interval 30s
+            health_timeout 5s
+
+            # Headers
+            header_up Host {host}
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+        }
+    }
+
+    # ==========================================================================
+    # STATIC UI - Serve React app with SPA fallback
+    # ==========================================================================
+    handle {
+        root * /srv/ui
+
+        # Try files, fallback to index.html for SPA routing
+        try_files {path} /index.html
+
+        file_server {
+            # Enable compression
+            precompressed gzip br
+        }
+    }
+
+    # ==========================================================================
+    # SECURITY HEADERS
+    # ==========================================================================
+    header {
+        # Prevent MIME type sniffing
+        X-Content-Type-Options nosniff
+
+        # Prevent clickjacking
+        X-Frame-Options DENY
+
+        # XSS protection
+        X-XSS-Protection "1; mode=block"
+
+        # Referrer policy
+        Referrer-Policy strict-origin-when-cross-origin
+
+        # Remove server identification
+        -Server
+    }
+
+    # ==========================================================================
+    # LOGGING
+    # ==========================================================================
+    log {
+        output file /data/access.log {
+            roll_size 100mb
+            roll_keep 5
+            roll_keep_for 168h
+        }
+        format json
+    }
+
+    # ==========================================================================
+    # COMPRESSION
+    # ==========================================================================
+    encode gzip zstd
+}
+
+# ==========================================================================
+# HEALTH CHECK ENDPOINT (for load balancers/monitoring)
+# ==========================================================================
+:8080 {
+    respond /health "OK" 200
+}

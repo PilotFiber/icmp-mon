@@ -1,0 +1,65 @@
+# ICMP-Mon Agent systemd Service
+#
+# Installation:
+#   1. Copy this file to /etc/systemd/system/icmpmon-agent.service
+#   2. Create /etc/icmpmon/agent.env with configuration
+#   3. Install the agent binary to /usr/local/bin/icmpmon-agent
+#   4. Run: sudo systemctl daemon-reload
+#   5. Run: sudo systemctl enable icmpmon-agent
+#   6. Run: sudo systemctl start icmpmon-agent
+#
+# Configuration (/etc/icmpmon/agent.env):
+#   ICMPMON_CONTROL_PLANE_URL=https://icmpmon.example.com
+#   ICMPMON_AGENT_NAME=agent-nyc-01
+#   ICMPMON_AGENT_REGION=us-east
+#   ICMPMON_AGENT_LOCATION=NYC Data Center
+#   ICMPMON_AGENT_PROVIDER=vultr
+
+[Unit]
+Description=ICMP-Mon Network Monitoring Agent
+Documentation=https://github.com/PilotFiber/icmp-mon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# Run as root for ICMP raw socket access
+# Alternative: Use CAP_NET_RAW capability with non-root user
+User=root
+Group=root
+
+# Environment configuration
+EnvironmentFile=/etc/icmpmon/agent.env
+
+# Agent binary
+ExecStart=/usr/local/bin/icmpmon-agent
+
+# Restart policy
+Restart=always
+RestartSec=10
+WatchdogSec=300
+
+# Resource limits
+LimitNOFILE=65536
+LimitNPROC=4096
+
+# Security hardening (compatible with root for ICMP)
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+
+# Allow network access
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=icmpmon-agent
+
+[Install]
+WantedBy=multi-user.target
