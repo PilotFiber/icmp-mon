@@ -165,6 +165,9 @@ func (c *Config) ApplyEnvOverrides() {
 	if v := os.Getenv("ICMPMON_CONTROL_PLANE_TOKEN"); v != "" {
 		c.ControlPlane.Token = v
 	}
+	if v := os.Getenv("ICMPMON_CONTROL_PLANE_INSECURE"); v == "true" || v == "1" {
+		c.ControlPlane.InsecureSkipVerify = true
+	}
 	if v := os.Getenv("ICMPMON_AGENT_NAME"); v != "" {
 		c.Agent.Name = v
 	}

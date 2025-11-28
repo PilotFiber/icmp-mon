@@ -14,7 +14,7 @@ services:
     cap_add:
       - NET_RAW
     environment:
-      ICMPMON_CONTROL_PLANE_URL: http://control-plane:8080
+      ICMPMON_CONTROL_PLANE_URL: https://${DOMAIN}
       ICMPMON_CONTROL_PLANE_INSECURE: "true"
       ICMPMON_AGENT_NAME: staging-nyc1
       ICMPMON_AGENT_REGION: us-east
@@ -24,7 +24,7 @@ services:
     depends_on:
       - control-plane
     networks:
-      - internal
+      - proxy
     logging:
       driver: "json-file"
       options:
@@ -40,7 +40,7 @@ services:
     cap_add:
       - NET_RAW
     environment:
-      ICMPMON_CONTROL_PLANE_URL: http://control-plane:8080
+      ICMPMON_CONTROL_PLANE_URL: https://${DOMAIN}
       ICMPMON_CONTROL_PLANE_INSECURE: "true"
       ICMPMON_AGENT_NAME: staging-lax1
       ICMPMON_AGENT_REGION: us-west
@@ -50,7 +50,7 @@ services:
     depends_on:
       - control-plane
     networks:
-      - internal
+      - proxy
     logging:
       driver: "json-file"
       options:
@@ -66,7 +66,7 @@ services:
     cap_add:
       - NET_RAW
     environment:
-      ICMPMON_CONTROL_PLANE_URL: http://control-plane:8080
+      ICMPMON_CONTROL_PLANE_URL: https://${DOMAIN}
       ICMPMON_CONTROL_PLANE_INSECURE: "true"
       ICMPMON_AGENT_NAME: staging-ams1
       ICMPMON_AGENT_REGION: eu-west
@@ -76,7 +76,7 @@ services:
     depends_on:
       - control-plane
     networks:
-      - internal
+      - proxy
     logging:
       driver: "json-file"
       options:
@@ -84,6 +84,6 @@ services:
         max-file: "3"
 
 networks:
-  internal:
-    name: icmpmon_internal
+  proxy:
+    name: icmpmon_proxy
     external: true
