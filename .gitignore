@@ -4,8 +4,10 @@
 *.dll
 *.so
 *.dylib
-/agent/cmd/agent
-/control-plane/cmd/control-plane
+
+# Built binaries (not the source directories)
+/agent/cmd/agent/agent
+/control-plane/cmd/control-plane/control-plane
 
 # Test binary
 *.test
