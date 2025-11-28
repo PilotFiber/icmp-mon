@@ -1,0 +1,89 @@
+# Fake agents for staging environment testing
+# Usage: docker compose -f docker-compose.staging.yml -f docker-compose.staging-agents.yml up -d
+#
+# This adds 3 simulated agents that connect to the control plane.
+# They will probe targets from inside Docker (limited network visibility).
+
+services:
+  agent-nyc1:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.agent
+    container_name: icmpmon-agent-nyc1
+    restart: unless-stopped
+    cap_add:
+      - NET_RAW
+    environment:
+      ICMPMON_CONTROL_PLANE_URL: http://control-plane:8080
+      ICMPMON_CONTROL_PLANE_INSECURE: "true"
+      ICMPMON_AGENT_NAME: staging-nyc1
+      ICMPMON_AGENT_REGION: us-east
+      ICMPMON_AGENT_LOCATION: "NYC1 Staging"
+      ICMPMON_AGENT_PROVIDER: docker
+      ICMPMON_AGENT_TAGS: '{"environment":"staging","pop":"NYC1"}'
+    depends_on:
+      - control-plane
+    networks:
+      - internal
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+
+  agent-lax1:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.agent
+    container_name: icmpmon-agent-lax1
+    restart: unless-stopped
+    cap_add:
+      - NET_RAW
+    environment:
+      ICMPMON_CONTROL_PLANE_URL: http://control-plane:8080
+      ICMPMON_CONTROL_PLANE_INSECURE: "true"
+      ICMPMON_AGENT_NAME: staging-lax1
+      ICMPMON_AGENT_REGION: us-west
+      ICMPMON_AGENT_LOCATION: "LAX1 Staging"
+      ICMPMON_AGENT_PROVIDER: docker
+      ICMPMON_AGENT_TAGS: '{"environment":"staging","pop":"LAX1"}'
+    depends_on:
+      - control-plane
+    networks:
+      - internal
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+
+  agent-ams1:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.agent
+    container_name: icmpmon-agent-ams1
+    restart: unless-stopped
+    cap_add:
+      - NET_RAW
+    environment:
+      ICMPMON_CONTROL_PLANE_URL: http://control-plane:8080
+      ICMPMON_CONTROL_PLANE_INSECURE: "true"
+      ICMPMON_AGENT_NAME: staging-ams1
+      ICMPMON_AGENT_REGION: eu-west
+      ICMPMON_AGENT_LOCATION: "AMS1 Staging"
+      ICMPMON_AGENT_PROVIDER: docker
+      ICMPMON_AGENT_TAGS: '{"environment":"staging","pop":"AMS1"}'
+    depends_on:
+      - control-plane
+    networks:
+      - internal
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+
+networks:
+  internal:
+    name: icmpmon_internal
+    external: true
