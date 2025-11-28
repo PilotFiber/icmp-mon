@@ -12,6 +12,7 @@ package client
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -31,15 +32,23 @@ type Client struct {
 
 // Config for the client.
 type Config struct {
-	BaseURL    string
-	AuthToken  string
-	HTTPClient *http.Client
+	BaseURL            string
+	AuthToken          string
+	HTTPClient         *http.Client
+	InsecureSkipVerify bool
 }
 
 // NewClient creates a new control plane client.
 func NewClient(cfg Config) *Client {
 	if cfg.HTTPClient == nil {
-		cfg.HTTPClient = &http.Client{Timeout: 30 * time.Second}
+		transport := &http.Transport{}
+		if cfg.InsecureSkipVerify {
+			transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+		}
+		cfg.HTTPClient = &http.Client{
+			Timeout:   30 * time.Second,
+			Transport: transport,
+		}
 	}
 	return &Client{
 		baseURL:    cfg.BaseURL,

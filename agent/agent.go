@@ -88,8 +88,9 @@ func New(cfg *config.Config, logger *slog.Logger) (*Agent, error) {
 
 	// Create control plane client
 	cpClient := client.NewClient(client.Config{
-		BaseURL:   cfg.ControlPlane.URL,
-		AuthToken: cfg.ControlPlane.Token,
+		BaseURL:            cfg.ControlPlane.URL,
+		AuthToken:          cfg.ControlPlane.Token,
+		InsecureSkipVerify: cfg.ControlPlane.InsecureSkipVerify,
 	})
 
 	// Create updater for self-updates
