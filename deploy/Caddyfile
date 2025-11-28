@@ -5,6 +5,9 @@
 # in docker-compose.staging.yml
 
 {$DOMAIN:localhost} {
+    # Use self-signed certificate for internal/private networks
+    tls internal
+
     # ==========================================================================
     # API PROXY - Route /api/* requests to control plane
     # ==========================================================================
