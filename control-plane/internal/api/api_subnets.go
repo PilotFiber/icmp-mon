@@ -26,6 +26,7 @@ func (s *Server) handleListSubnets(w http.ResponseWriter, r *http.Request) {
 			POPName:         query.Get("pop"),
 			City:            query.Get("city"),
 			Region:          query.Get("region"),
+			ServiceStatus:   query.Get("service_status"), // Filter by service status (e.g., "cancelled", "active")
 			Search:          query.Get("search"),
 			IncludeArchived: query.Get("include_archived") == "true",
 		}

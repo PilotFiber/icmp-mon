@@ -42,6 +42,10 @@ type Target struct {
 	// IP classification
 	IPType IPType `json:"ip_type,omitempty"`
 
+	// Representative monitoring - only representatives are actively monitored
+	// Non-representatives can be discovered on-demand
+	IsRepresentative bool `json:"is_representative"`
+
 	// Monitoring state machine
 	MonitoringState   MonitoringState `json:"monitoring_state"`
 	StateChangedAt    time.Time       `json:"state_changed_at"`
@@ -78,6 +82,9 @@ const (
 	StateUnknown MonitoringState = "unknown"
 	// StateActive - Responds to ICMP normally, full monitoring
 	StateActive MonitoringState = "active"
+	// StateStandby - Verified responsive but not actively monitored (failover pool)
+	// Probed hourly for failover readiness; promoted to representative when needed
+	StateStandby MonitoringState = "standby"
 	// StateDegraded - Responding but with packet loss or latency issues (alertable)
 	StateDegraded MonitoringState = "degraded"
 	// StateDown - Had baseline, now completely unresponsive (alertable)
@@ -175,6 +182,7 @@ type Subnet struct {
 	// Enriched metadata (from Pilot relationships)
 	VLANID         *int    `json:"vlan_id,omitempty"`
 	ServiceID      *int    `json:"service_id,omitempty"`
+	ServiceStatus  *string `json:"service_status,omitempty"` // Flight Deck service status (e.g., "active", "cancelled")
 	SubscriberID   *int    `json:"subscriber_id,omitempty"`
 	SubscriberName *string `json:"subscriber_name,omitempty"`
 
@@ -194,6 +202,10 @@ type Subnet struct {
 	State         string     `json:"state"` // "active" | "archived"
 	ArchivedAt    *time.Time `json:"archived_at,omitempty"`
 	ArchiveReason *string    `json:"archive_reason,omitempty"`
+
+	// Representative monitoring configuration
+	// NULL = use system default (from config), positive int = override for this subnet
+	MaxRepresentatives *int `json:"max_representatives,omitempty"`
 
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
@@ -381,6 +393,13 @@ type Agent struct {
 	// Archive support (soft-delete)
 	ArchivedAt    *time.Time `json:"archived_at,omitempty"`
 	ArchiveReason *string    `json:"archive_reason,omitempty"`
+
+	// API Key authentication (bcrypt hash, never plaintext)
+	APIKeyHash       *string    `json:"-"`                                // Never expose in API responses
+	APIKeyCreatedAt  *time.Time `json:"api_key_created_at,omitempty"`
+
+	// Tailscale integration
+	TailscaleIP *string `json:"tailscale_ip,omitempty"`
 }
 
 // AgentStatus represents the health state of an agent.

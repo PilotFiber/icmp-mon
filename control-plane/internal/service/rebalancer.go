@@ -282,22 +282,29 @@ func (r *Rebalancer) HandleAgentRecovery(ctx context.Context, agentID string) er
 // MaterializeAllAssignments computes and stores all assignments.
 // This is used for initial population of the assignments table.
 func (r *Rebalancer) MaterializeAllAssignments(ctx context.Context) error {
-	r.logger.Info("materializing all assignments")
+	_, err := r.MaterializeAllAssignmentsWithCount(ctx)
+	return err
+}
+
+// MaterializeAllAssignmentsWithCount computes and stores all assignments,
+// returning the number of assignments created.
+func (r *Rebalancer) MaterializeAllAssignmentsWithCount(ctx context.Context) (int, error) {
+	r.logger.Info("materializing all assignments (batch mode)")
 
 	// Clear existing assignments
 	if err := r.store.DeleteAllAssignments(ctx); err != nil {
-		return fmt.Errorf("clearing assignments: %w", err)
+		return 0, fmt.Errorf("clearing assignments: %w", err)
 	}
 
 	// Get all data needed
 	targets, err := r.store.ListTargets(ctx)
 	if err != nil {
-		return fmt.Errorf("listing targets: %w", err)
+		return 0, fmt.Errorf("listing targets: %w", err)
 	}
 
 	allAgents, err := r.store.ListAgentsWithStatus(ctx)
 	if err != nil {
-		return fmt.Errorf("listing agents: %w", err)
+		return 0, fmt.Errorf("listing agents: %w", err)
 	}
 
 	activeAgents := make([]types.Agent, 0)
@@ -309,7 +316,7 @@ func (r *Rebalancer) MaterializeAllAssignments(ctx context.Context) error {
 
 	tiers, err := r.store.ListTiers(ctx)
 	if err != nil {
-		return fmt.Errorf("listing tiers: %w", err)
+		return 0, fmt.Errorf("listing tiers: %w", err)
 	}
 
 	tierMap := make(map[string]types.Tier)
@@ -317,20 +324,26 @@ func (r *Rebalancer) MaterializeAllAssignments(ctx context.Context) error {
 		tierMap[tier.Name] = tier
 	}
 
-	created := 0
+	r.logger.Info("computing assignments",
+		"targets", len(targets),
+		"active_agents", len(activeAgents),
+		"tiers", len(tiers),
+	)
+
+	// Collect all assignments in memory first
+	var allAssignments []*types.TargetAssignment
+	skipped := 0
 
 	for _, target := range targets {
 		// Skip archived/inactive targets
 		if target.ArchivedAt != nil {
+			skipped++
 			continue
 		}
 
 		tier, ok := tierMap[target.Tier]
 		if !ok {
-			r.logger.Warn("tier not found for target",
-				"target_id", target.ID,
-				"tier", target.Tier,
-			)
+			skipped++
 			continue
 		}
 
@@ -352,25 +365,49 @@ func (r *Rebalancer) MaterializeAllAssignments(ctx context.Context) error {
 			selectedAgents = r.selectAgentsForTarget(target, eligibleAgents, count, tier.AgentSelection.Diversity)
 		}
 
-		// Create assignments
+		// Collect assignments
 		for _, agent := range selectedAgents {
-			assignment := &types.TargetAssignment{
+			allAssignments = append(allAssignments, &types.TargetAssignment{
 				TargetID:   target.ID,
 				AgentID:    agent.ID,
 				Tier:       tier.Name,
 				AssignedBy: types.AssignedByInitial,
-			}
-
-			if err := r.store.CreateAssignment(ctx, assignment); err != nil {
-				r.logger.Error("failed to create assignment",
-					"target_id", target.ID,
-					"agent_id", agent.ID,
-					"error", err,
-				)
-				continue
-			}
-			created++
+			})
 		}
+	}
+
+	r.logger.Info("inserting assignments",
+		"total_assignments", len(allAssignments),
+		"skipped_targets", skipped,
+	)
+
+	// Bulk insert in batches for reliability
+	batchSize := 10000
+	created := 0
+
+	for i := 0; i < len(allAssignments); i += batchSize {
+		end := i + batchSize
+		if end > len(allAssignments) {
+			end = len(allAssignments)
+		}
+
+		batch := allAssignments[i:end]
+		count, err := r.store.BulkCreateAssignments(ctx, batch)
+		if err != nil {
+			r.logger.Error("batch insert failed",
+				"batch_start", i,
+				"batch_size", len(batch),
+				"error", err,
+			)
+			return created, fmt.Errorf("batch insert failed at offset %d: %w", i, err)
+		}
+		created += count
+
+		r.logger.Debug("batch inserted",
+			"batch_start", i,
+			"batch_count", count,
+			"total_created", created,
+		)
 	}
 
 	r.logger.Info("materialization complete",
@@ -378,7 +415,7 @@ func (r *Rebalancer) MaterializeAllAssignments(ctx context.Context) error {
 		"assignments_created", created,
 	)
 
-	return nil
+	return created, nil
 }
 
 // =============================================================================

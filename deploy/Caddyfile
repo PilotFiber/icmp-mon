@@ -23,6 +23,16 @@
             header_up X-Real-IP {remote_host}
             header_up X-Forwarded-For {remote_host}
             header_up X-Forwarded-Proto {scheme}
+
+            # SSE/streaming support - disable buffering and increase timeouts
+            flush_interval -1
+            transport http {
+                read_timeout 15m
+                write_timeout 15m
+                response_header_timeout 15m
+                keepalive 30s
+                keepalive_idle_conns 10
+            }
         }
     }
 

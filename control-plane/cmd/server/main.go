@@ -24,7 +24,9 @@ import (
 
 	"github.com/pilot-net/icmp-mon/control-plane/internal/api"
 	"github.com/pilot-net/icmp-mon/control-plane/internal/buffer"
+	"github.com/pilot-net/icmp-mon/control-plane/internal/cache"
 	"github.com/pilot-net/icmp-mon/control-plane/internal/enrollment"
+	"github.com/pilot-net/icmp-mon/control-plane/internal/metrics"
 	"github.com/pilot-net/icmp-mon/control-plane/internal/pilot"
 	"github.com/pilot-net/icmp-mon/control-plane/internal/rollout"
 	"github.com/pilot-net/icmp-mon/control-plane/internal/secrets"
@@ -83,9 +85,8 @@ func main() {
 	}
 	logger.Info("connected to database")
 
-	// Create service and API
+	// Create service
 	svc := service.NewService(db, logger)
-	apiServer := api.NewServer(svc, logger)
 
 	// Initialize Redis buffer for probe results (optional - only if Redis URL is configured)
 	var resultBuffer *buffer.ResultBuffer
@@ -109,6 +110,30 @@ func main() {
 		logger.Info("redis buffer disabled - ICMPMON_REDIS_URL not set")
 	}
 
+	// Initialize metrics collector for infrastructure health monitoring
+	var metricsCollector *metrics.Collector
+	if resultBuffer != nil {
+		metricsCollector = metrics.NewCollector(db, resultBuffer)
+	} else {
+		metricsCollector = metrics.NewCollector(db, nil)
+	}
+	logger.Info("metrics collector initialized")
+
+	// Initialize response cache (uses same Redis connection)
+	var responseCache *cache.Cache
+	if redisURL != "" {
+		var err error
+		responseCache, err = cache.New(redisURL, logger)
+		if err != nil {
+			logger.Warn("response cache disabled - connection failed", "error", err)
+		} else {
+			logger.Info("response cache enabled")
+		}
+	}
+
+	// Create API server
+	apiServer := api.NewServer(svc, metricsCollector, responseCache, logger)
+
 	// Initialize enrollment service (optional - only if secrets backend is configured)
 	keyStore, err := secrets.NewKeyStore(secrets.ConfigFromEnv(), logger)
 	if err != nil {
@@ -120,6 +145,19 @@ func main() {
 
 		// Create enrollment service
 		enrollmentSvc := enrollment.NewService(enrollmentStore, keyStore, agentChecker, logger)
+
+		// Configure Tailscale if auth key is provided
+		if tsAuthKey := os.Getenv("TAILSCALE_AUTH_KEY"); tsAuthKey != "" {
+			enrollmentSvc.SetTailscaleConfig(enrollment.TailscaleConfig{
+				AuthKey:      tsAuthKey,
+				AcceptRoutes: true, // Accept routes from subnet router
+			})
+		}
+
+		// Configure control plane URL for agent enrollment
+		if cpURL := os.Getenv("CONTROL_PLANE_URL"); cpURL != "" {
+			enrollmentSvc.SetControlPlaneURL(cpURL)
+		}
 
 		// Register enrollment routes
 		enrollmentHandler := api.NewEnrollmentHandler(enrollmentSvc, logger)
@@ -259,6 +297,14 @@ type storeAgentChecker struct {
 
 func (c *storeAgentChecker) WaitForAgent(ctx context.Context, name string, timeout time.Duration) (string, error) {
 	return c.db.WaitForAgentRegistration(ctx, name, timeout)
+}
+
+func (c *storeAgentChecker) SetAgentAPIKey(ctx context.Context, agentID, keyHash string) error {
+	return c.db.SetAgentAPIKey(ctx, agentID, keyHash)
+}
+
+func (c *storeAgentChecker) SetAgentTailscaleIP(ctx context.Context, agentID, tailscaleIP string) error {
+	return c.db.SetAgentTailscaleIP(ctx, agentID, tailscaleIP)
 }
 
 // storeEnrollmentAdapter implements enrollment.EnrollmentStore using store.Store.
@@ -595,6 +641,22 @@ func (a *storeStateAdapter) SetTargetBaseline(ctx context.Context, targetID stri
 	return a.db.SetTargetBaseline(ctx, targetID)
 }
 
+func (a *storeStateAdapter) GetSubnetRepresentative(ctx context.Context, subnetID string) (*types.Target, error) {
+	return a.db.GetSubnetRepresentative(ctx, subnetID)
+}
+
+func (a *storeStateAdapter) ElectRepresentative(ctx context.Context, subnetID, targetID string) error {
+	return a.db.ElectRepresentative(ctx, subnetID, targetID)
+}
+
+func (a *storeStateAdapter) TransitionTargetToStandby(ctx context.Context, targetID, reason string) error {
+	return a.db.TransitionTargetToStandby(ctx, targetID, reason)
+}
+
+func (a *storeStateAdapter) PromoteStandbyToRepresentative(ctx context.Context, subnetID string) (*types.Target, error) {
+	return a.db.PromoteStandbyToRepresentative(ctx, subnetID)
+}
+
 // =============================================================================
 // PILOT SYNC STORE ADAPTER
 // =============================================================================
@@ -634,6 +696,18 @@ func (a *storePilotSyncAdapter) CreateAutoTarget(ctx context.Context, params sto
 
 func (a *storePilotSyncAdapter) UpdateTargetTagsBySubnet(ctx context.Context, subnetID string, tags map[string]string) error {
 	return a.db.UpdateTargetTagsBySubnet(ctx, subnetID, tags)
+}
+
+func (a *storePilotSyncAdapter) UpdateSubnetServiceStatus(ctx context.Context, subnetID string, newStatus *string) (bool, error) {
+	return a.db.UpdateSubnetServiceStatus(ctx, subnetID, newStatus)
+}
+
+func (a *storePilotSyncAdapter) TransitionTargetsByServiceCancellation(ctx context.Context, subnetID string) (int, error) {
+	return a.db.TransitionTargetsByServiceCancellation(ctx, subnetID)
+}
+
+func (a *storePilotSyncAdapter) ResolveAlertsBySubnet(ctx context.Context, subnetID string, reason string) (int, error) {
+	return a.db.ResolveAlertsBySubnet(ctx, subnetID, reason)
 }
 
 // =============================================================================

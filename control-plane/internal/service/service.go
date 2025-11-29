@@ -34,6 +34,11 @@ func (s *Service) SetResultBuffer(buf *buffer.ResultBuffer) {
 	s.resultBuffer = buf
 }
 
+// Store returns the underlying store for direct access (used by middleware).
+func (s *Service) Store() *store.Store {
+	return s.store
+}
+
 // =============================================================================
 // AGENT OPERATIONS
 // =============================================================================
@@ -735,15 +740,35 @@ func (s *Service) GetTargetLiveResults(ctx context.Context, targetID string, sec
 	return s.store.GetTargetLiveResults(ctx, targetID, seconds)
 }
 
+// GetInMarketLatencyTrend returns in-market latency trend for the dashboard.
+func (s *Service) GetInMarketLatencyTrend(ctx context.Context, window time.Duration) ([]store.ProbeHistoryPoint, error) {
+	bucketSize := time.Minute
+	if window > 2*time.Hour {
+		bucketSize = 5 * time.Minute
+	}
+	return s.store.GetInMarketLatencyTrend(ctx, window, bucketSize)
+}
+
+// GetRegionLatencyMatrix returns the city-to-city latency matrix.
+func (s *Service) GetRegionLatencyMatrix(ctx context.Context, window time.Duration) (*store.RegionLatencyMatrix, error) {
+	return s.store.GetRegionLatencyMatrix(ctx, window)
+}
+
+// GetTargetLatencyBreakdown returns in-market latency breakdown for a target.
+func (s *Service) GetTargetLatencyBreakdown(ctx context.Context, targetID string, window time.Duration) (*store.LatencyBreakdown, error) {
+	return s.store.GetTargetLatencyBreakdown(ctx, targetID, window)
+}
+
 // =============================================================================
 // COMMANDS (MTR, etc.)
 // =============================================================================
 
 // CreateMTRCommand creates an MTR command for a target.
-func (s *Service) CreateMTRCommand(ctx context.Context, targetIP string, agentIDs []string) (*store.Command, error) {
+func (s *Service) CreateMTRCommand(ctx context.Context, targetID, targetIP string, agentIDs []string) (*store.Command, error) {
 	cmd := &store.Command{
 		ID:          uuid.New().String(),
 		CommandType: "mtr",
+		TargetID:    targetID,
 		TargetIP:    targetIP,
 		AgentIDs:    agentIDs,
 		Status:      "pending",
@@ -758,7 +783,7 @@ func (s *Service) CreateMTRCommand(ctx context.Context, targetIP string, agentID
 		return nil, err
 	}
 
-	s.logger.Info("MTR command created", "command_id", cmd.ID, "target_ip", targetIP)
+	s.logger.Info("MTR command created", "command_id", cmd.ID, "target_id", targetID, "target_ip", targetIP)
 	return cmd, nil
 }
 
@@ -770,6 +795,11 @@ func (s *Service) GetCommand(ctx context.Context, commandID string) (*store.Comm
 // GetCommandResults returns results for a command.
 func (s *Service) GetCommandResults(ctx context.Context, commandID string) ([]store.CommandResult, error) {
 	return s.store.GetCommandResults(ctx, commandID)
+}
+
+// GetCommandsByTarget returns commands for a specific target.
+func (s *Service) GetCommandsByTarget(ctx context.Context, targetID string, limit int) ([]store.CommandWithResults, error) {
+	return s.store.GetCommandsByTarget(ctx, targetID, limit)
 }
 
 // GetPendingCommands returns pending commands for an agent.

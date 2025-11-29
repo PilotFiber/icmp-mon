@@ -69,6 +69,33 @@ func (s *Store) DeleteAllAssignments(ctx context.Context) error {
 	return err
 }
 
+// BulkCreateAssignments inserts multiple assignments in a single transaction.
+// This is much faster than individual inserts for large numbers of assignments.
+func (s *Store) BulkCreateAssignments(ctx context.Context, assignments []*types.TargetAssignment) (int, error) {
+	if len(assignments) == 0 {
+		return 0, nil
+	}
+
+	// Use COPY for maximum performance
+	now := time.Now()
+	rows := make([][]any, len(assignments))
+	for i, a := range assignments {
+		rows[i] = []any{a.TargetID, a.AgentID, a.Tier, now, a.AssignedBy}
+	}
+
+	copyCount, err := s.pool.CopyFrom(
+		ctx,
+		pgx.Identifier{"target_assignments"},
+		[]string{"target_id", "agent_id", "tier", "assigned_at", "assigned_by"},
+		pgx.CopyFromRows(rows),
+	)
+	if err != nil {
+		return 0, err
+	}
+
+	return int(copyCount), nil
+}
+
 // GetAssignment retrieves an assignment by ID.
 func (s *Store) GetAssignment(ctx context.Context, id string) (*types.TargetAssignment, error) {
 	var a types.TargetAssignment

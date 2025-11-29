@@ -29,6 +29,13 @@ const statusConfig = {
     dot: 'bg-pilot-cyan',
     label: 'Pending',
   },
+  // Standby - verified responsive, in failover pool (hourly probes)
+  standby: {
+    bg: 'bg-blue-500/20',
+    text: 'text-blue-400',
+    dot: 'bg-blue-400',
+    label: 'Standby',
+  },
   // Gray/muted status for targets that never responded (not alertable)
   inactive: {
     bg: 'bg-theme-muted/20',

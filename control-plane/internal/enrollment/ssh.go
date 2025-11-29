@@ -300,3 +300,62 @@ func escapeForBash(s string) string {
 	// Replace single quotes with '\'' (end quote, escaped quote, start quote)
 	return strings.ReplaceAll(s, "'", "'\\''")
 }
+
+// RunWithKeepalive executes a command and sends periodic keepalive events.
+// This is used for long-running commands like apt-get install to prevent SSE timeouts.
+func (c *SSHClient) RunWithKeepalive(ctx context.Context, cmd string, events chan<- Event, step string, keepaliveInterval time.Duration) (string, error) {
+	session, err := c.client.NewSession()
+	if err != nil {
+		return "", fmt.Errorf("creating session: %w", err)
+	}
+	defer session.Close()
+
+	// Capture output
+	var stdout, stderr bytes.Buffer
+	session.Stdout = &stdout
+	session.Stderr = &stderr
+
+	// Create a channel to signal completion
+	done := make(chan error, 1)
+	go func() {
+		done <- session.Run(cmd)
+	}()
+
+	// Start keepalive ticker
+	ticker := time.NewTicker(keepaliveInterval)
+	defer ticker.Stop()
+
+	// Wait for completion or context cancellation
+	for {
+		select {
+		case err := <-done:
+			if err != nil {
+				// Include stderr in error message
+				if stderr.Len() > 0 {
+					return stdout.String(), fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr.String()))
+				}
+				return stdout.String(), err
+			}
+			return stdout.String(), nil
+		case <-ticker.C:
+			// Send keepalive event
+			if events != nil {
+				events <- Event{
+					Type:      "keepalive",
+					Step:      step,
+					Message:   "Working...",
+					Timestamp: time.Now(),
+				}
+			}
+		case <-ctx.Done():
+			session.Signal(ssh.SIGTERM)
+			return "", ctx.Err()
+		}
+	}
+}
+
+// RunWithSudoKeepalive executes a command with sudo and sends periodic keepalive events.
+func (c *SSHClient) RunWithSudoKeepalive(ctx context.Context, cmd string, events chan<- Event, step string, keepaliveInterval time.Duration) (string, error) {
+	sudoCmd := fmt.Sprintf("sudo -n %s", cmd)
+	return c.RunWithKeepalive(ctx, sudoCmd, events, step, keepaliveInterval)
+}

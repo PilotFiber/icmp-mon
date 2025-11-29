@@ -29,7 +29,8 @@ type IPPool struct {
 	POPName       *string `json:"pop_name,omitempty"`       // Extracted from CSW hostname (e.g., "jfk00")
 
 	// Service relationship
-	ServiceID *int `json:"service_id,omitempty"`
+	ServiceID     *int    `json:"service_id,omitempty"`
+	ServiceStatus *string `json:"service_status,omitempty"` // Flight Deck service status (e.g., "active", "cancelled")
 
 	// Subscriber info
 	SubscriberID   *int    `json:"subscriber_id,omitempty"`

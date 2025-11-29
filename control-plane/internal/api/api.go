@@ -56,24 +56,44 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pilot-net/icmp-mon/control-plane/internal/cache"
+	"github.com/pilot-net/icmp-mon/control-plane/internal/metrics"
 	"github.com/pilot-net/icmp-mon/control-plane/internal/service"
 	"github.com/pilot-net/icmp-mon/control-plane/internal/store"
 	"github.com/pilot-net/icmp-mon/pkg/types"
 )
 
+// Cache TTLs for various endpoints
+const (
+	cacheTTLFleetOverview     = 30 * time.Second
+	cacheTTLTargetStatuses    = 30 * time.Second
+	cacheTTLInfraHealth       = 60 * time.Second
+	cacheTTLLatencyMatrix     = 60 * time.Second
+	cacheTTLInMarketLatency   = 30 * time.Second
+	cacheTTLLatencyTrend      = 30 * time.Second
+	cacheTTLTargetList        = 60 * time.Second
+)
+
 // Server is the HTTP API server.
 type Server struct {
-	svc    *service.Service
-	logger *slog.Logger
-	mux    *http.ServeMux
+	svc              *service.Service
+	metricsCollector *metrics.Collector
+	cache            *cache.Cache
+	logger           *slog.Logger
+	mux              *http.ServeMux
+
+	// Agent authentication (disabled by default for grace period)
+	agentAuthEnabled bool
 }
 
 // NewServer creates a new API server.
-func NewServer(svc *service.Service, logger *slog.Logger) *Server {
+func NewServer(svc *service.Service, metricsCollector *metrics.Collector, responseCache *cache.Cache, logger *slog.Logger) *Server {
 	s := &Server{
-		svc:    svc,
-		logger: logger,
-		mux:    http.NewServeMux(),
+		svc:              svc,
+		metricsCollector: metricsCollector,
+		cache:            responseCache,
+		logger:           logger,
+		mux:              http.NewServeMux(),
 	}
 	s.registerRoutes()
 	return s
@@ -82,6 +102,13 @@ func NewServer(svc *service.Service, logger *slog.Logger) *Server {
 // Mux returns the underlying ServeMux for registering additional routes.
 func (s *Server) Mux() *http.ServeMux {
 	return s.mux
+}
+
+// EnableAgentAuth enables agent API key authentication enforcement.
+// By default, auth is in grace period mode (logs but doesn't reject).
+func (s *Server) EnableAgentAuth() {
+	s.agentAuthEnabled = true
+	s.logger.Info("agent API key authentication enabled")
 }
 
 // ServeHTTP implements http.Handler.
@@ -106,15 +133,24 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) registerRoutes() {
+	// Create the agent auth middleware (grace period by default, checks but doesn't reject)
+	agentAuth := s.AgentAuthMiddleware(AgentAuthConfig{
+		Enabled: s.agentAuthEnabled,
+		Logger:  s.logger,
+	})
+
 	// Health
 	s.mux.HandleFunc("GET /api/v1/health", s.handleHealth)
+	s.mux.HandleFunc("GET /api/v1/infrastructure/health", s.handleInfrastructureHealth)
 
-	// Agent registration and lifecycle
+	// Agent registration (open - no auth required, agents don't have keys yet)
 	s.mux.HandleFunc("POST /api/v1/agents/register", s.handleAgentRegister)
-	s.mux.HandleFunc("POST /api/v1/agents/{id}/heartbeat", s.handleAgentHeartbeat)
-	s.mux.HandleFunc("GET /api/v1/agents/{id}/assignments", s.handleAgentAssignments)
-	s.mux.HandleFunc("GET /api/v1/agents/{id}/commands", s.handleAgentCommands)
-	s.mux.HandleFunc("POST /api/v1/agents/{id}/commands/{cmd}/result", s.handleAgentCommandResult)
+
+	// Agent lifecycle (authenticated - these are agent-to-control-plane calls)
+	s.mux.HandleFunc("POST /api/v1/agents/{id}/heartbeat", wrapHandler(s.handleAgentHeartbeat, agentAuth))
+	s.mux.HandleFunc("GET /api/v1/agents/{id}/assignments", wrapHandler(s.handleAgentAssignments, agentAuth))
+	s.mux.HandleFunc("GET /api/v1/agents/{id}/commands", wrapHandler(s.handleAgentCommands, agentAuth))
+	s.mux.HandleFunc("POST /api/v1/agents/{id}/commands/{cmd}/result", wrapHandler(s.handleAgentCommandResult, agentAuth))
 
 	// Agent management
 	s.mux.HandleFunc("GET /api/v1/agents", s.handleListAgents)
@@ -141,12 +177,15 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("GET /api/v1/targets/{id}/history/by-agent", s.handleGetTargetHistoryByAgent)
 	s.mux.HandleFunc("GET /api/v1/targets/{id}/live", s.handleGetTargetLive)
 	s.mux.HandleFunc("POST /api/v1/targets/{id}/mtr", s.handleTriggerMTR)
+	s.mux.HandleFunc("GET /api/v1/targets/{id}/commands", s.handleGetTargetCommands)
 
 	// Commands
 	s.mux.HandleFunc("GET /api/v1/commands/{id}", s.handleGetCommand)
 
 	// Metrics
 	s.mux.HandleFunc("GET /api/v1/metrics/latency", s.handleGetLatencyTrend)
+	s.mux.HandleFunc("GET /api/v1/metrics/latency/in-market", s.handleGetInMarketLatencyTrend)
+	s.mux.HandleFunc("GET /api/v1/metrics/latency/matrix", s.handleGetLatencyMatrix)
 	s.mux.HandleFunc("POST /api/v1/metrics/query", s.handleQueryMetrics)
 
 	// Tiers
@@ -171,8 +210,8 @@ func (s *Server) registerRoutes() {
 	// Reports
 	s.mux.HandleFunc("GET /api/v1/reports/targets/{id}", s.handleGetTargetReport)
 
-	// Results ingestion
-	s.mux.HandleFunc("POST /api/v1/results", s.handleIngestResults)
+	// Results ingestion (authenticated - agents submit probe results)
+	s.mux.HandleFunc("POST /api/v1/results", wrapHandler(s.handleIngestResults, agentAuth))
 
 	// Subnets
 	s.mux.HandleFunc("GET /api/v1/subnets", s.handleListSubnets)
@@ -210,6 +249,9 @@ func (s *Server) registerRoutes() {
 	// Alert configuration
 	s.mux.HandleFunc("GET /api/v1/alerts/config", s.handleListAlertConfigs)
 	s.mux.HandleFunc("PUT /api/v1/alerts/config/{key}", s.handleUpdateAlertConfig)
+
+	// Agent binary packages (for enrollment)
+	s.mux.HandleFunc("GET /api/v1/packages/{platform}", s.handleGetPackage)
 }
 
 // =============================================================================
@@ -221,6 +263,40 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"status": "ok",
 		"time":   time.Now().UTC().Format(time.RFC3339),
 	})
+}
+
+func (s *Server) handleInfrastructureHealth(w http.ResponseWriter, r *http.Request) {
+	if s.metricsCollector == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "metrics collector not initialized")
+		return
+	}
+
+	const cacheKey = "infrastructure_health"
+
+	// Try cache first
+	if s.cache != nil {
+		if data, err := s.cache.Get(r.Context(), cacheKey); err == nil && data != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			w.Write(data)
+			return
+		}
+	}
+
+	health, err := s.metricsCollector.GetInfrastructureHealth(r.Context())
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "failed to get infrastructure health: "+err.Error())
+		return
+	}
+
+	// Cache the result
+	if s.cache != nil {
+		if err := s.cache.SetJSON(r.Context(), cacheKey, health, cacheTTLInfraHealth); err != nil {
+			s.logger.Warn("failed to cache infrastructure health", "error", err)
+		}
+	}
+
+	s.writeJSON(w, http.StatusOK, health)
 }
 
 // =============================================================================
@@ -596,11 +672,30 @@ func (s *Server) handleAgentStats(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleFleetOverview(w http.ResponseWriter, r *http.Request) {
+	const cacheKey = "fleet_overview"
+
+	// Try cache first
+	if s.cache != nil {
+		if data, err := s.cache.Get(r.Context(), cacheKey); err == nil && data != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			w.Write(data)
+			return
+		}
+	}
+
 	overview, err := s.svc.GetFleetOverview(r.Context())
 	if err != nil {
 		s.logger.Error("get fleet overview failed", "error", err)
 		s.writeError(w, http.StatusInternalServerError, "failed to get fleet overview")
 		return
+	}
+
+	// Cache the result
+	if s.cache != nil {
+		if err := s.cache.SetJSON(r.Context(), cacheKey, overview, cacheTTLFleetOverview); err != nil {
+			s.logger.Warn("failed to cache fleet overview", "error", err)
+		}
 	}
 
 	s.writeJSON(w, http.StatusOK, overview)
@@ -662,7 +757,19 @@ func (s *Server) handleListTargets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Legacy: return all targets
+	// Legacy: return all targets (with caching)
+	const cacheKey = "target_list"
+
+	// Try cache first
+	if s.cache != nil {
+		if data, err := s.cache.Get(r.Context(), cacheKey); err == nil && data != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			w.Write(data)
+			return
+		}
+	}
+
 	targets, err := s.svc.ListTargets(r.Context())
 	if err != nil {
 		s.logger.Error("list targets failed", "error", err)
@@ -670,10 +777,21 @@ func (s *Server) handleListTargets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.writeJSON(w, http.StatusOK, map[string]any{
+	response := map[string]any{
 		"targets": targets,
 		"count":   len(targets),
-	})
+	}
+
+	// Cache the result
+	if s.cache != nil {
+		if data, err := json.Marshal(response); err == nil {
+			if err := s.cache.Set(r.Context(), cacheKey, data, cacheTTLTargetList); err != nil {
+				s.logger.Warn("failed to cache target list", "error", err)
+			}
+		}
+	}
+
+	s.writeJSON(w, http.StatusOK, response)
 }
 
 type createTargetRequest struct {
@@ -954,6 +1072,18 @@ func getAgentID(r *http.Request) string {
 // =============================================================================
 
 func (s *Server) handleGetAllTargetStatuses(w http.ResponseWriter, r *http.Request) {
+	const cacheKey = "target_statuses"
+
+	// Try cache first
+	if s.cache != nil {
+		if data, err := s.cache.Get(r.Context(), cacheKey); err == nil && data != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			w.Write(data)
+			return
+		}
+	}
+
 	statuses, err := s.svc.GetAllTargetStatuses(r.Context())
 	if err != nil {
 		s.logger.Error("get target statuses failed", "error", err)
@@ -961,10 +1091,19 @@ func (s *Server) handleGetAllTargetStatuses(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	s.writeJSON(w, http.StatusOK, map[string]any{
+	response := map[string]any{
 		"statuses": statuses,
 		"count":    len(statuses),
-	})
+	}
+
+	// Cache the result
+	if s.cache != nil {
+		if err := s.cache.SetJSON(r.Context(), cacheKey, response, cacheTTLTargetStatuses); err != nil {
+			s.logger.Warn("failed to cache target statuses", "error", err)
+		}
+	}
+
+	s.writeJSON(w, http.StatusOK, response)
 }
 
 func (s *Server) handleGetTargetStatus(w http.ResponseWriter, r *http.Request) {
@@ -1093,6 +1232,19 @@ func (s *Server) handleGetLatencyTrend(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Cache key includes window
+	cacheKey := fmt.Sprintf("latency_trend_%s", window.String())
+
+	// Try cache first
+	if s.cache != nil {
+		if data, err := s.cache.Get(r.Context(), cacheKey); err == nil && data != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			w.Write(data)
+			return
+		}
+	}
+
 	history, err := s.svc.GetLatencyTrend(r.Context(), window)
 	if err != nil {
 		s.logger.Error("get latency trend failed", "error", err)
@@ -1100,10 +1252,107 @@ func (s *Server) handleGetLatencyTrend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.writeJSON(w, http.StatusOK, map[string]any{
+	response := map[string]any{
 		"window":  window.String(),
 		"history": history,
-	})
+	}
+
+	// Cache the result
+	if s.cache != nil {
+		if data, err := json.Marshal(response); err == nil {
+			if err := s.cache.Set(r.Context(), cacheKey, data, cacheTTLLatencyTrend); err != nil {
+				s.logger.Warn("failed to cache latency trend", "error", err)
+			}
+		}
+	}
+
+	s.writeJSON(w, http.StatusOK, response)
+}
+
+func (s *Server) handleGetInMarketLatencyTrend(w http.ResponseWriter, r *http.Request) {
+	// Get window from query param, default to 24 hours
+	windowStr := r.URL.Query().Get("window")
+	window := 24 * time.Hour
+	if windowStr != "" {
+		if parsed, err := time.ParseDuration(windowStr); err == nil {
+			window = parsed
+		}
+	}
+
+	// Cache key includes window
+	cacheKey := fmt.Sprintf("in_market_latency_%s", window.String())
+
+	// Try cache first
+	if s.cache != nil {
+		if data, err := s.cache.Get(r.Context(), cacheKey); err == nil && data != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			w.Write(data)
+			return
+		}
+	}
+
+	history, err := s.svc.GetInMarketLatencyTrend(r.Context(), window)
+	if err != nil {
+		s.logger.Error("get in-market latency trend failed", "error", err)
+		s.writeError(w, http.StatusInternalServerError, "failed to get in-market latency trend")
+		return
+	}
+
+	response := map[string]any{
+		"window":    window.String(),
+		"in_market": true,
+		"history":   history,
+	}
+
+	// Cache the result
+	if s.cache != nil {
+		if err := s.cache.SetJSON(r.Context(), cacheKey, response, cacheTTLInMarketLatency); err != nil {
+			s.logger.Warn("failed to cache in-market latency", "error", err)
+		}
+	}
+
+	s.writeJSON(w, http.StatusOK, response)
+}
+
+func (s *Server) handleGetLatencyMatrix(w http.ResponseWriter, r *http.Request) {
+	// Get window from query param, default to 24 hours
+	windowStr := r.URL.Query().Get("window")
+	window := 24 * time.Hour
+	if windowStr != "" {
+		if parsed, err := time.ParseDuration(windowStr); err == nil {
+			window = parsed
+		}
+	}
+
+	// Cache key includes window for different time ranges
+	cacheKey := fmt.Sprintf("latency_matrix_%s", window.String())
+
+	// Try cache first
+	if s.cache != nil {
+		if data, err := s.cache.Get(r.Context(), cacheKey); err == nil && data != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			w.Write(data)
+			return
+		}
+	}
+
+	matrix, err := s.svc.GetRegionLatencyMatrix(r.Context(), window)
+	if err != nil {
+		s.logger.Error("get latency matrix failed", "error", err)
+		s.writeError(w, http.StatusInternalServerError, "failed to get latency matrix")
+		return
+	}
+
+	// Cache the result
+	if s.cache != nil {
+		if err := s.cache.SetJSON(r.Context(), cacheKey, matrix, cacheTTLLatencyMatrix); err != nil {
+			s.logger.Warn("failed to cache latency matrix", "error", err)
+		}
+	}
+
+	s.writeJSON(w, http.StatusOK, matrix)
 }
 
 // =============================================================================
@@ -1135,7 +1384,7 @@ func (s *Server) handleTriggerMTR(w http.ResponseWriter, r *http.Request) {
 	}
 	s.readJSON(r, &req) // Ignore error, use empty if not provided
 
-	cmd, err := s.svc.CreateMTRCommand(r.Context(), target.IP, req.AgentIDs)
+	cmd, err := s.svc.CreateMTRCommand(r.Context(), targetID, target.IP, req.AgentIDs)
 	if err != nil {
 		s.logger.Error("create MTR command failed", "target", targetID, "error", err)
 		s.writeError(w, http.StatusInternalServerError, "failed to create MTR command")
@@ -1145,10 +1394,36 @@ func (s *Server) handleTriggerMTR(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusAccepted, map[string]any{
 		"command_id":   cmd.ID,
 		"command_type": cmd.CommandType,
+		"target_id":    cmd.TargetID,
 		"target_ip":    cmd.TargetIP,
 		"status":       cmd.Status,
 		"message":      "MTR command queued for agents",
 	})
+}
+
+func (s *Server) handleGetTargetCommands(w http.ResponseWriter, r *http.Request) {
+	targetID := r.PathValue("id")
+	if targetID == "" {
+		s.writeError(w, http.StatusBadRequest, "target ID required")
+		return
+	}
+
+	limitStr := r.URL.Query().Get("limit")
+	limit := 50
+	if limitStr != "" {
+		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 {
+			limit = l
+		}
+	}
+
+	commands, err := s.svc.GetCommandsByTarget(r.Context(), targetID, limit)
+	if err != nil {
+		s.logger.Error("get target commands failed", "target", targetID, "error", err)
+		s.writeError(w, http.StatusInternalServerError, "failed to get commands")
+		return
+	}
+
+	s.writeJSON(w, http.StatusOK, commands)
 }
 
 func (s *Server) handleGetCommand(w http.ResponseWriter, r *http.Request) {

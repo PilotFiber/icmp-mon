@@ -12,3 +12,5 @@ export { MetricsExplorer } from './MetricsExplorer';
 export { Subnets } from './Subnets';
 export { SubnetDetail } from './SubnetDetail';
 export { ReviewQueue } from './ReviewQueue';
+export { LatencyMatrix } from './LatencyMatrix';
+export { Infrastructure } from './Infrastructure';

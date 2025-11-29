@@ -145,6 +145,17 @@ func (s *Service) GetEffectiveTier(ctx context.Context, target *types.Target, ti
 		}
 		return nil
 
+	case types.StateStandby:
+		// Standby targets are verified hourly to maintain failover pool
+		if tier, ok := tiers["standby_recheck"]; ok {
+			return &tier
+		}
+		// Fallback to inactive_recheck if standby_recheck doesn't exist
+		if tier, ok := tiers["inactive_recheck"]; ok {
+			return &tier
+		}
+		return nil
+
 	case types.StateUnresponsive, types.StateExcluded:
 		// Smart re-check: only probe if subnet has no active coverage
 		if target.SubnetID != nil {

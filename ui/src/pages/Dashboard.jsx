@@ -13,6 +13,8 @@ import {
   Zap,
   TrendingUp,
   TrendingDown,
+  CheckCircle,
+  XCircle,
 } from 'lucide-react';
 import {
   LineChart,
@@ -26,6 +28,7 @@ import {
   BarChart,
   Bar,
   Cell,
+  ReferenceLine,
 } from 'recharts';
 
 import { PageHeader, PageContent } from '../components/Layout';
@@ -40,12 +43,14 @@ import { formatRelativeTime } from '../lib/utils';
 
 export function Dashboard() {
   const navigate = useNavigate();
+  const [fleetOverview, setFleetOverview] = useState(null);
   const [agents, setAgents] = useState([]);
   const [targets, setTargets] = useState([]);
   const [targetStatuses, setTargetStatuses] = useState({});
   const [tiers, setTiers] = useState([]);
   const [incidents, setIncidents] = useState([]);
   const [latencyHistory, setLatencyHistory] = useState([]);
+  const [inMarketLatency, setInMarketLatency] = useState({ avg: null, history: [] });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [lastRefresh, setLastRefresh] = useState(new Date());
@@ -55,19 +60,29 @@ export function Dashboard() {
       setLoading(true);
       setError(null);
 
-      const [agentsRes, targetsRes, tiersRes, latencyRes, statusesRes, incidentsRes] = await Promise.all([
+      // Use fleet overview for stats + fewer additional calls
+      const [overviewRes, agentsRes, tiersRes, latencyRes, inMarketRes, incidentsRes] = await Promise.all([
+        endpoints.getFleetOverview().catch(() => null),
         endpoints.listAgents(),
-        endpoints.listTargets(),
         endpoints.listTiers(),
         endpoints.getLatencyTrend('1h').catch(() => ({ history: [] })),
-        endpoints.getAllTargetStatuses().catch(() => ({ statuses: [] })),
+        endpoints.getInMarketLatencyTrend('1h').catch(() => ({ history: [] })),
         endpoints.listIncidents('active', 10).catch(() => ({ incidents: [] })),
       ]);
 
+      setFleetOverview(overviewRes);
       setAgents(agentsRes.agents || []);
-      setTargets(targetsRes.targets || []);
       setTiers(tiersRes.tiers || []);
       setIncidents(incidentsRes.incidents || []);
+
+      // Only fetch targets/statuses if needed for detailed display
+      // For now, we still need them for the targets table
+      const [targetsRes, statusesRes] = await Promise.all([
+        endpoints.listTargets(),
+        endpoints.getAllTargetStatuses().catch(() => ({ statuses: [] })),
+      ]);
+
+      setTargets(targetsRes.targets || []);
 
       // Convert statuses array to map by target_id
       const statusMap = {};
@@ -84,6 +99,19 @@ export function Dashboard() {
       }));
       setLatencyHistory(history);
 
+      // Process in-market latency data
+      const inMarketHistory = (inMarketRes.history || []).map(point => ({
+        time: new Date(point.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        latency: point.avg_latency_ms?.toFixed(2) || null,
+        p95: point.max_latency_ms?.toFixed(2) || null,
+      }));
+      // Calculate current in-market avg from last few data points
+      const recentPoints = inMarketHistory.slice(-5).filter(p => p.latency);
+      const avgInMarket = recentPoints.length > 0
+        ? (recentPoints.reduce((sum, p) => sum + parseFloat(p.latency), 0) / recentPoints.length).toFixed(2)
+        : null;
+      setInMarketLatency({ avg: avgInMarket, history: inMarketHistory });
+
       setLastRefresh(new Date());
     } catch (err) {
       console.error('Failed to fetch data:', err);
@@ -96,18 +124,42 @@ export function Dashboard() {
   useEffect(() => {
     fetchData();
 
-    // Refresh every 10 seconds
-    const interval = setInterval(fetchData, 10000);
+    // Refresh every 30 seconds (was 10 seconds)
+    const interval = setInterval(fetchData, 30000);
     return () => clearInterval(interval);
   }, []);
 
-  // Calculate stats
-  const totalTargets = targets.length;
-  const totalAgents = agents.length;
-  const activeAgents = agents.filter(a => a.status === 'active').length;
+  // Filter out archived agents for display
+  const nonArchivedAgents = useMemo(() => {
+    return agents.filter(agent => !agent.archived_at);
+  }, [agents]);
+
+  // Calculate stats - prefer fleet overview when available, but use nonArchivedAgents for fallback
+  const totalTargets = fleetOverview?.total_targets ?? targets.length;
+  const totalAgents = fleetOverview?.total_agents ?? nonArchivedAgents.length;
+  const activeAgents = fleetOverview?.active_agents ?? nonArchivedAgents.filter(a => a.status === 'active').length;
   const activeIncidents = incidents.filter(i => i.status === 'active' || i.status === 'acknowledged').length;
 
-  // Calculate target health stats
+  // Health stats from fleet overview
+  const healthStats = useMemo(() => {
+    if (fleetOverview) {
+      return {
+        monitorable: fleetOverview.monitorable_targets || 0,
+        healthy: fleetOverview.healthy_targets || 0,
+        percentage: fleetOverview.health_percentage || 0,
+      };
+    }
+    // Fallback to calculated stats
+    const healthy = Object.values(targetStatuses).filter(s => s.status === 'healthy').length;
+    const monitorable = Object.values(targetStatuses).length;
+    return {
+      monitorable,
+      healthy,
+      percentage: monitorable > 0 ? (healthy / monitorable * 100) : 0,
+    };
+  }, [fleetOverview, targetStatuses]);
+
+  // Calculate target health stats for backwards compat
   const targetStats = useMemo(() => {
     const healthy = Object.values(targetStatuses).filter(s => s.status === 'healthy').length;
     const degraded = Object.values(targetStatuses).filter(s => s.status === 'degraded').length;
@@ -116,10 +168,10 @@ export function Dashboard() {
     return { healthy, degraded, down, unknown };
   }, [targetStatuses, totalTargets]);
 
-  // Group agents by provider/region
+  // Group agents by provider/region (excluding archived)
   const agentsByProvider = useMemo(() => {
     const grouped = {};
-    agents.forEach(agent => {
+    nonArchivedAgents.forEach(agent => {
       const provider = agent.provider || 'unknown';
       if (!grouped[provider]) {
         grouped[provider] = { total: 0, active: 0, agents: [] };
@@ -129,12 +181,12 @@ export function Dashboard() {
       grouped[provider].agents.push(agent);
     });
     return grouped;
-  }, [agents]);
+  }, [nonArchivedAgents]);
 
-  // Group agents by region
+  // Group agents by region (excluding archived)
   const agentsByRegion = useMemo(() => {
     const grouped = {};
-    agents.forEach(agent => {
+    nonArchivedAgents.forEach(agent => {
       const region = agent.region || 'unknown';
       if (!grouped[region]) {
         grouped[region] = { total: 0, active: 0 };
@@ -146,7 +198,7 @@ export function Dashboard() {
       region,
       ...data,
     }));
-  }, [agents]);
+  }, [nonArchivedAgents]);
 
   // Group targets by tier
   const tierBreakdown = tiers.map(tier => {
@@ -230,7 +282,7 @@ export function Dashboard() {
         )}
 
         {/* Top Metrics */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4 mb-6">
           <MetricCard
             title="Active Agents"
             value={`${activeAgents}/${totalAgents}`}
@@ -243,9 +295,31 @@ export function Dashboard() {
             icon={Target}
           />
           <MetricCard
-            title="Healthy"
-            value={targetStats.healthy}
-            status="healthy"
+            title="Health"
+            value={`${healthStats.percentage.toFixed(1)}%`}
+            subtitle={`${healthStats.healthy.toLocaleString()} / ${healthStats.monitorable.toLocaleString()}`}
+            status={healthStats.percentage >= 99 ? 'healthy' : healthStats.percentage >= 95 ? 'degraded' : 'down'}
+          />
+          <MetricCard
+            title="In-Market Latency"
+            value={inMarketLatency.avg ? `${inMarketLatency.avg}ms` : 'N/A'}
+            subtitle={inMarketLatency.avg ? (
+              <span className="flex items-center gap-1">
+                {parseFloat(inMarketLatency.avg) <= 5 ? (
+                  <>
+                    <CheckCircle className="w-3 h-3 text-status-healthy" />
+                    <span className="text-status-healthy">SLA Met</span>
+                  </>
+                ) : (
+                  <>
+                    <XCircle className="w-3 h-3 text-pilot-red" />
+                    <span className="text-pilot-red">SLA Breach</span>
+                  </>
+                )}
+              </span>
+            ) : 'No data'}
+            icon={Activity}
+            status={inMarketLatency.avg ? (parseFloat(inMarketLatency.avg) <= 5 ? 'healthy' : 'down') : null}
           />
           <MetricCard
             title="Degraded/Down"
@@ -273,7 +347,7 @@ export function Dashboard() {
               </a>
             </div>
             <CardContent>
-              {agents.length === 0 ? (
+              {nonArchivedAgents.length === 0 ? (
                 <div className="text-center py-8 text-theme-muted">
                   <Server className="w-12 h-12 mx-auto mb-3 opacity-50" />
                   <p>No agents registered</p>
@@ -319,13 +393,33 @@ export function Dashboard() {
 
           {/* Latency Chart */}
           <Card className="lg:col-span-2">
-            <CardTitle>Latency Trend (24h)</CardTitle>
+            <div className="flex items-center justify-between mb-2">
+              <CardTitle>In-Market Latency (1h)</CardTitle>
+              <div className="flex items-center gap-4 text-xs">
+                <span className="flex items-center gap-1.5">
+                  <span className="w-3 h-0.5 bg-[#10B981]"></span>
+                  <span className="text-theme-muted">In-Market Avg</span>
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <span className="w-3 h-0.5 bg-[#6EDBE0] opacity-50"></span>
+                  <span className="text-theme-muted">All Traffic</span>
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <span className="w-3 h-0.5 bg-[#FC534E]" style={{ borderTop: '1px dashed #FC534E' }}></span>
+                  <span className="text-theme-muted">5ms SLA</span>
+                </span>
+              </div>
+            </div>
             <CardContent className="mt-4 h-64">
               <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={latencyHistory}>
+                <AreaChart data={inMarketLatency.history.length > 0 ? inMarketLatency.history : latencyHistory}>
                   <defs>
+                    <linearGradient id="inMarketGradient" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#10B981" stopOpacity={0.3}/>
+                      <stop offset="95%" stopColor="#10B981" stopOpacity={0}/>
+                    </linearGradient>
                     <linearGradient id="latencyGradient" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#6EDBE0" stopOpacity={0.3}/>
+                      <stop offset="5%" stopColor="#6EDBE0" stopOpacity={0.15}/>
                       <stop offset="95%" stopColor="#6EDBE0" stopOpacity={0}/>
                     </linearGradient>
                   </defs>
@@ -342,6 +436,7 @@ export function Dashboard() {
                     tickLine={false}
                     axisLine={false}
                     tickFormatter={(v) => `${v}ms`}
+                    domain={[0, 'auto']}
                   />
                   <Tooltip
                     contentStyle={{
@@ -350,23 +445,36 @@ export function Dashboard() {
                       borderRadius: '8px',
                     }}
                     labelStyle={{ color: '#9CA3AF' }}
+                    formatter={(value, name) => [`${value}ms`, name]}
+                  />
+                  <ReferenceLine
+                    y={5}
+                    stroke="#FC534E"
+                    strokeDasharray="5 5"
+                    strokeWidth={1}
+                    label={{
+                      value: '5ms SLA',
+                      position: 'right',
+                      fill: '#FC534E',
+                      fontSize: 10,
+                    }}
                   />
                   <Area
                     type="monotone"
                     dataKey="latency"
-                    stroke="#6EDBE0"
+                    stroke="#10B981"
                     strokeWidth={2}
-                    fill="url(#latencyGradient)"
-                    name="Avg Latency"
+                    fill="url(#inMarketGradient)"
+                    name="In-Market Avg"
                   />
                   <Line
                     type="monotone"
                     dataKey="p95"
-                    stroke="#FC534E"
+                    stroke="#6EDBE0"
                     strokeWidth={1}
-                    strokeDasharray="5 5"
+                    strokeOpacity={0.5}
                     dot={false}
-                    name="P95 Latency"
+                    name="P95"
                   />
                 </AreaChart>
               </ResponsiveContainer>

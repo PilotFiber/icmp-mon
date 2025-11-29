@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
+import { Link } from 'react-router-dom';
 import {
   Bell,
   Filter,
@@ -524,8 +525,16 @@ export function Alerts() {
                               <Clock className="w-3 h-3" />
                               {formatRelativeTime(new Date(alert.created_at))}
                             </span>
-                            {alert.target_name && (
-                              <span className="text-theme-secondary font-mono">{alert.target_name}</span>
+                            {alert.target_id && (
+                              <Link
+                                to={`/targets/${alert.target_id}`}
+                                className="text-pilot-cyan hover:text-pilot-cyan-light font-mono transition-colors"
+                              >
+                                {alert.target_ip}
+                              </Link>
+                            )}
+                            {alert.subnet_cidr && (
+                              <span className="text-theme-secondary font-mono">({alert.subnet_cidr})</span>
                             )}
                             {alert.agent_name && (
                               <span className="flex items-center gap-1">

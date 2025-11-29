@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, Link } from 'react-router-dom';
 import {
   Target,
   RefreshCw,
@@ -8,6 +8,7 @@ import {
   ExternalLink,
   AlertTriangle,
   Activity,
+  Network,
   Server,
   Check,
   X,
@@ -51,6 +52,33 @@ const agentColors = [
   '#6EDBE0', '#FC534E', '#F7B84B', '#4CAF50',
   '#9C27B0', '#FF9800', '#2196F3', '#E91E63',
 ];
+
+// In-market agents get green-ish colors, cross-market get warmer colors
+const inMarketColors = ['#10B981', '#34D399', '#6EE7B7', '#A7F3D0'];
+const crossMarketColors = ['#6EDBE0', '#F7B84B', '#FC534E', '#9C27B0', '#FF9800', '#2196F3'];
+
+// Monitoring state color mapping (maps to StatusBadge statuses)
+const monitoringStateColors = {
+  active: 'healthy',
+  degraded: 'degraded',
+  down: 'down',
+  standby: 'standby',
+  excluded: 'inactive',
+  unresponsive: 'inactive',
+  unknown: 'unknown',
+  inactive: 'unknown',
+};
+
+const monitoringStateLabels = {
+  active: 'Active',
+  degraded: 'Degraded',
+  down: 'Down',
+  standby: 'Standby',
+  excluded: 'Excluded',
+  unresponsive: 'Never Responded',
+  unknown: 'Unknown',
+  inactive: 'Inactive',
+};
 
 // Target Edit Modal
 function TargetModal({ isOpen, onClose, target, tiers, onSave }) {
@@ -194,13 +222,23 @@ function PerAgentChart({ data, visibleAgents, metric = 'latency', timeWindow }) 
     );
   }
 
+  // Build agent map with in-market status
   const agentMap = {};
+  let inMarketIdx = 0;
+  let crossMarketIdx = 0;
+
   data.forEach(point => {
     if (!agentMap[point.agent_id]) {
+      const isInMarket = point.is_in_market === true;
+      const color = isInMarket
+        ? inMarketColors[inMarketIdx++ % inMarketColors.length]
+        : crossMarketColors[crossMarketIdx++ % crossMarketColors.length];
       agentMap[point.agent_id] = {
         id: point.agent_id,
         name: point.agent_name,
-        color: agentColors[Object.keys(agentMap).length % agentColors.length],
+        region: point.agent_region || 'Unknown',
+        isInMarket,
+        color,
       };
     }
   });
@@ -232,7 +270,15 @@ function PerAgentChart({ data, visibleAgents, metric = 'latency', timeWindow }) 
       return { ...point, timeLabel };
     });
 
-  const agents = Object.values(agentMap);
+  // Sort agents: in-market first, then cross-market
+  const agents = Object.values(agentMap).sort((a, b) => {
+    if (a.isInMarket && !b.isInMarket) return -1;
+    if (!a.isInMarket && b.isInMarket) return 1;
+    return a.name.localeCompare(b.name);
+  });
+
+  const inMarketAgents = agents.filter(a => a.isInMarket);
+  const crossMarketAgents = agents.filter(a => !a.isInMarket);
 
   return (
     <ResponsiveContainer width="100%" height={280}>
@@ -242,14 +288,40 @@ function PerAgentChart({ data, visibleAgents, metric = 'latency', timeWindow }) 
         <Tooltip
           contentStyle={{ backgroundColor: '#18284F', border: '1px solid #2A3D6B', borderRadius: '8px' }}
           labelStyle={{ color: '#9CA3AF' }}
-          formatter={(value, name) => [metric === 'latency' ? `${value?.toFixed(1) || 0}ms` : `${value?.toFixed(1) || 0}%`, name]}
+          formatter={(value, name, props) => {
+            const agent = agents.find(a => a.name === name);
+            const label = agent?.isInMarket ? `${name} (in-market)` : name;
+            return [metric === 'latency' ? `${value?.toFixed(1) || 0}ms` : `${value?.toFixed(1) || 0}%`, label];
+          }}
         />
-        <Legend wrapperStyle={{ paddingTop: 10 }} formatter={(value) => <span style={{ color: '#9CA3AF', fontSize: 11 }}>{value}</span>} />
+        <Legend
+          wrapperStyle={{ paddingTop: 10 }}
+          formatter={(value) => {
+            const agent = agents.find(a => a.name === value);
+            return (
+              <span style={{ color: '#9CA3AF', fontSize: 11 }}>
+                {value}
+                {agent?.isInMarket && <span style={{ color: '#10B981', marginLeft: 4, fontSize: 9 }}>●</span>}
+              </span>
+            );
+          }}
+        />
         {agents.map(agent => {
           const agentKey = agent.name.replace(/[^a-zA-Z0-9]/g, '_');
           const isVisible = visibleAgents.length === 0 || visibleAgents.includes(agent.id);
           return (
-            <Line key={agent.id} type="monotone" dataKey={agentKey} stroke={agent.color} strokeWidth={2} dot={false} name={agent.name} hide={!isVisible} connectNulls />
+            <Line
+              key={agent.id}
+              type="monotone"
+              dataKey={agentKey}
+              stroke={agent.color}
+              strokeWidth={agent.isInMarket ? 2.5 : 1.5}
+              strokeDasharray={agent.isInMarket ? undefined : '4 2'}
+              dot={false}
+              name={agent.name}
+              hide={!isVisible}
+              connectNulls
+            />
           );
         })}
       </LineChart>
@@ -307,23 +379,48 @@ function LiveView({ targetId }) {
     const grouped = {};
     liveData.forEach(result => {
       if (!grouped[result.agent_id]) {
-        grouped[result.agent_id] = { agent_id: result.agent_id, agent_name: result.agent_name, agent_region: result.agent_region, agent_provider: result.agent_provider, results: [] };
+        grouped[result.agent_id] = {
+          agent_id: result.agent_id,
+          agent_name: result.agent_name,
+          agent_region: result.agent_region,
+          agent_provider: result.agent_provider,
+          is_in_market: result.is_in_market === true,
+          results: [],
+        };
       }
       grouped[result.agent_id].results.push(result);
     });
     Object.values(grouped).forEach(agent => {
       agent.results.sort((a, b) => new Date(b.time) - new Date(a.time));
     });
-    return Object.values(grouped);
+    // Sort: in-market first, then by name
+    return Object.values(grouped).sort((a, b) => {
+      if (a.is_in_market && !b.is_in_market) return -1;
+      if (!a.is_in_market && b.is_in_market) return 1;
+      return a.agent_name.localeCompare(b.agent_name);
+    });
   }, [liveData]);
 
   const chartData = useMemo(() => {
-    if (liveData.length === 0) return { data: [], agents: [] };
+    if (liveData.length === 0) return { data: [], agents: [], inMarketAgents: [], crossMarketAgents: [] };
 
     const agentMap = {};
+    let inMarketIdx = 0;
+    let crossMarketIdx = 0;
+
     liveData.forEach(result => {
       if (!agentMap[result.agent_id]) {
-        agentMap[result.agent_id] = { id: result.agent_id, name: result.agent_name, color: agentColors[Object.keys(agentMap).length % agentColors.length] };
+        const isInMarket = result.is_in_market === true;
+        const color = isInMarket
+          ? inMarketColors[inMarketIdx++ % inMarketColors.length]
+          : crossMarketColors[crossMarketIdx++ % crossMarketColors.length];
+        agentMap[result.agent_id] = {
+          id: result.agent_id,
+          name: result.agent_name,
+          region: result.agent_region || 'Unknown',
+          isInMarket,
+          color,
+        };
       }
     });
 
@@ -347,7 +444,13 @@ function LiveView({ targetId }) {
         timeLabel: new Date(point.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
       }));
 
-    return { data: sortedData, agents: Object.values(agentMap) };
+    const allAgents = Object.values(agentMap);
+    return {
+      data: sortedData,
+      agents: allAgents,
+      inMarketAgents: allAgents.filter(a => a.isInMarket),
+      crossMarketAgents: allAgents.filter(a => !a.isInMarket),
+    };
   }, [liveData]);
 
   const getLatencyColor = (latency) => {
@@ -391,22 +494,55 @@ function LiveView({ targetId }) {
         </div>
       ) : viewMode === 'graph' ? (
         <div>
-          <div className="flex flex-wrap gap-2 mb-3">
-            {chartData.agents.map(agent => {
-              const isVisible = visibleAgents.length === 0 || visibleAgents.includes(agent.id);
-              return (
-                <button key={agent.id} onClick={() => {
-                  if (visibleAgents.length === 0) setVisibleAgents([agent.id]);
-                  else if (visibleAgents.includes(agent.id)) {
-                    const newVisible = visibleAgents.filter(id => id !== agent.id);
-                    setVisibleAgents(newVisible.length === 0 ? [] : newVisible);
-                  } else setVisibleAgents([...visibleAgents, agent.id]);
-                }} className={`flex items-center gap-1.5 px-2 py-1 rounded text-xs transition-colors ${isVisible ? 'bg-surface-tertiary text-theme-primary' : 'bg-surface-primary text-theme-muted'}`}>
-                  <span className="w-2 h-2 rounded-full" style={{ backgroundColor: isVisible ? agent.color : '#4B5563' }} />
-                  {agent.name}
-                </button>
-              );
-            })}
+          <div className="mb-3 space-y-2">
+            {chartData.inMarketAgents.length > 0 && (
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs font-medium text-status-healthy flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-status-healthy"></span>
+                  In-Market
+                </span>
+                {chartData.inMarketAgents.map(agent => {
+                  const isVisible = visibleAgents.length === 0 || visibleAgents.includes(agent.id);
+                  return (
+                    <button key={agent.id} onClick={() => {
+                      if (visibleAgents.length === 0) setVisibleAgents([agent.id]);
+                      else if (visibleAgents.includes(agent.id)) {
+                        const newVisible = visibleAgents.filter(id => id !== agent.id);
+                        setVisibleAgents(newVisible.length === 0 ? [] : newVisible);
+                      } else setVisibleAgents([...visibleAgents, agent.id]);
+                    }} className={`flex items-center gap-1.5 px-2 py-1 rounded text-xs transition-colors ${isVisible ? 'bg-surface-tertiary text-theme-primary' : 'bg-surface-primary text-theme-muted'}`}>
+                      <span className="w-2 h-2 rounded-full" style={{ backgroundColor: isVisible ? agent.color : '#4B5563' }} />
+                      {agent.name}
+                      <span className="text-theme-muted text-[10px]">({agent.region})</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+            {chartData.crossMarketAgents.length > 0 && (
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs font-medium text-theme-muted flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-theme-muted"></span>
+                  Cross-Market
+                </span>
+                {chartData.crossMarketAgents.map(agent => {
+                  const isVisible = visibleAgents.length === 0 || visibleAgents.includes(agent.id);
+                  return (
+                    <button key={agent.id} onClick={() => {
+                      if (visibleAgents.length === 0) setVisibleAgents([agent.id]);
+                      else if (visibleAgents.includes(agent.id)) {
+                        const newVisible = visibleAgents.filter(id => id !== agent.id);
+                        setVisibleAgents(newVisible.length === 0 ? [] : newVisible);
+                      } else setVisibleAgents([...visibleAgents, agent.id]);
+                    }} className={`flex items-center gap-1.5 px-2 py-1 rounded text-xs transition-colors ${isVisible ? 'bg-surface-tertiary text-theme-primary' : 'bg-surface-primary text-theme-muted'}`}>
+                      <span className="w-2 h-2 rounded-full" style={{ backgroundColor: isVisible ? agent.color : '#4B5563' }} />
+                      {agent.name}
+                      <span className="text-theme-muted text-[10px]">({agent.region})</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
             {visibleAgents.length > 0 && <button onClick={() => setVisibleAgents([])} className="text-xs text-pilot-cyan hover:text-pilot-cyan-light">Show All</button>}
           </div>
 
@@ -414,12 +550,45 @@ function LiveView({ targetId }) {
             <LineChart data={chartData.data}>
               <XAxis dataKey="timeLabel" stroke="#6B7280" fontSize={10} tickLine={false} axisLine={false} interval="preserveStartEnd" />
               <YAxis stroke="#6B7280" fontSize={10} tickLine={false} axisLine={false} tickFormatter={(v) => `${v?.toFixed(0) || 0}ms`} domain={['auto', 'auto']} />
-              <Tooltip contentStyle={{ backgroundColor: '#18284F', border: '1px solid #2A3D6B', borderRadius: '8px' }} labelStyle={{ color: '#9CA3AF' }} formatter={(value, name) => [`${value?.toFixed(1) || 0}ms`, name]} />
-              <Legend wrapperStyle={{ paddingTop: 10 }} formatter={(value) => <span style={{ color: '#9CA3AF', fontSize: 11 }}>{value}</span>} />
+              <Tooltip
+                contentStyle={{ backgroundColor: '#18284F', border: '1px solid #2A3D6B', borderRadius: '8px' }}
+                labelStyle={{ color: '#9CA3AF' }}
+                formatter={(value, name) => {
+                  const agent = chartData.agents.find(a => a.name === name);
+                  const label = agent?.isInMarket ? `${name} (in-market)` : name;
+                  return [`${value?.toFixed(1) || 0}ms`, label];
+                }}
+              />
+              <Legend
+                wrapperStyle={{ paddingTop: 10 }}
+                formatter={(value) => {
+                  const agent = chartData.agents.find(a => a.name === value);
+                  return (
+                    <span style={{ color: '#9CA3AF', fontSize: 11 }}>
+                      {value}
+                      {agent?.isInMarket && <span style={{ color: '#10B981', marginLeft: 4, fontSize: 9 }}>●</span>}
+                    </span>
+                  );
+                }}
+              />
               {chartData.agents.map(agent => {
                 const agentKey = agent.name.replace(/[^a-zA-Z0-9]/g, '_');
                 const isVisible = visibleAgents.length === 0 || visibleAgents.includes(agent.id);
-                return <Line key={agent.id} type="monotone" dataKey={agentKey} stroke={agent.color} strokeWidth={2} dot={{ r: 3, fill: agent.color }} name={agent.name} hide={!isVisible} connectNulls isAnimationActive={false} />;
+                return (
+                  <Line
+                    key={agent.id}
+                    type="monotone"
+                    dataKey={agentKey}
+                    stroke={agent.color}
+                    strokeWidth={agent.isInMarket ? 2.5 : 1.5}
+                    strokeDasharray={agent.isInMarket ? undefined : '4 2'}
+                    dot={{ r: 3, fill: agent.color }}
+                    name={agent.name}
+                    hide={!isVisible}
+                    connectNulls
+                    isAnimationActive={false}
+                  />
+                );
               })}
             </LineChart>
           </ResponsiveContainer>
@@ -432,10 +601,11 @@ function LiveView({ targetId }) {
               const minLatency = successResults.length > 0 ? Math.min(...successResults.map(r => r.latency_ms)) : null;
               const maxLatency = successResults.length > 0 ? Math.max(...successResults.map(r => r.latency_ms)) : null;
               return (
-                <div key={agent.agent_id} className="bg-surface-primary rounded-lg p-2">
+                <div key={agent.agent_id} className={`bg-surface-primary rounded-lg p-2 ${agent.is_in_market ? 'border-l-2 border-status-healthy' : ''}`}>
                   <div className="flex items-center gap-1.5 mb-1">
                     <span className="w-2 h-2 rounded-full" style={{ backgroundColor: agentColor }} />
                     <span className="text-xs font-medium text-theme-primary truncate">{agent.agent_name}</span>
+                    {agent.is_in_market && <span className="text-[9px] text-status-healthy">●</span>}
                   </div>
                   <div className="text-xs text-theme-muted">
                     <div>Avg: <span className="text-theme-primary font-mono">{avgLatency?.toFixed(1) || '—'}ms</span></div>
@@ -449,10 +619,11 @@ function LiveView({ targetId }) {
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
           {resultsByAgent.map(agent => (
-            <div key={agent.agent_id} className="bg-surface-primary rounded-lg p-3">
+            <div key={agent.agent_id} className={`bg-surface-primary rounded-lg p-3 ${agent.is_in_market ? 'border-l-2 border-status-healthy' : ''}`}>
               <div className="flex items-center gap-2 mb-2 border-b border-theme pb-2">
-                <Server className="w-3 h-3 text-pilot-cyan" />
+                <Server className={`w-3 h-3 ${agent.is_in_market ? 'text-status-healthy' : 'text-pilot-cyan'}`} />
                 <span className="font-medium text-theme-primary text-sm">{agent.agent_name}</span>
+                {agent.is_in_market && <span className="text-[9px] px-1.5 py-0.5 bg-status-healthy/20 text-status-healthy rounded">in-market</span>}
                 <span className="text-xs text-theme-muted ml-auto">{agent.agent_region} • {agent.agent_provider}</span>
               </div>
               <div className="space-y-1 max-h-32 overflow-y-auto">
@@ -508,6 +679,8 @@ export function TargetDetail() {
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [mtrLoading, setMtrLoading] = useState(false);
   const [mtrResult, setMtrResult] = useState(null);
+  const [historicalMtrResult, setHistoricalMtrResult] = useState(null);
+  const [commandHistory, setCommandHistory] = useState([]);
   const [showAgentSelector, setShowAgentSelector] = useState(false);
   const [selectedAgents, setSelectedAgents] = useState([]);
   const [editingDescription, setEditingDescription] = useState(false);
@@ -518,11 +691,12 @@ export function TargetDetail() {
     try {
       setLoading(true);
       setError(null);
-      const [targetRes, tiersRes, agentsRes, statusesRes] = await Promise.all([
+      const [targetRes, tiersRes, agentsRes, statusesRes, commandsRes] = await Promise.all([
         endpoints.getTarget(id),
         endpoints.listTiers(),
         endpoints.listAgents(),
         endpoints.getAllTargetStatuses(),
+        endpoints.getTargetCommands(id, 10).catch(() => []),
       ]);
       setTarget(targetRes);
       setTiers(tiersRes.tiers || []);
@@ -530,11 +704,21 @@ export function TargetDetail() {
       const statusMap = {};
       (statusesRes.statuses || []).forEach(s => { statusMap[s.target_id] = s; });
       setStatus(statusMap[id] || null);
+      setCommandHistory(commandsRes || []);
     } catch (err) {
       console.error('Failed to fetch target:', err);
       setError(err.message);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const refreshCommandHistory = async () => {
+    try {
+      const commandsRes = await endpoints.getTargetCommands(id, 10);
+      setCommandHistory(commandsRes || []);
+    } catch (err) {
+      console.error('Failed to fetch command history:', err);
     }
   };
 
@@ -594,12 +778,26 @@ export function TargetDetail() {
       attempts++;
       try {
         const res = await endpoints.getCommand(commandId);
-        if (res.command?.status === 'completed' || res.results?.length > 0) {
-          setMtrResult({ commandId, status: 'completed', results: res.results || [] });
+        const results = res.results || [];
+        const isCompleted = res.command?.status === 'completed';
+
+        // Update with current results (show partial results while polling)
+        if (results.length > 0) {
+          setMtrResult({ commandId, status: isCompleted ? 'completed' : 'pending', results });
+        }
+
+        // Stop polling if completed or max attempts reached
+        if (isCompleted) {
+          setMtrResult({ commandId, status: 'completed', results });
+          refreshCommandHistory(); // Update command history list
           return;
         }
-        if (attempts < maxAttempts) setTimeout(poll, 2000);
-        else setMtrResult({ commandId, status: 'timeout', message: 'MTR request timed out' });
+        if (attempts < maxAttempts) {
+          setTimeout(poll, 2000);
+        } else {
+          // Timeout - show whatever results we have
+          setMtrResult({ commandId, status: 'timeout', message: `MTR request timed out (${results.length} results received)`, results });
+        }
       } catch (err) {
         console.error('MTR poll error:', err);
         if (attempts < maxAttempts) setTimeout(poll, 2000);
@@ -726,7 +924,10 @@ export function TargetDetail() {
               <div className="flex items-center gap-3 mb-1">
                 <Target className="w-6 h-6 text-pilot-cyan" />
                 <h3 className="text-xl font-mono font-semibold text-theme-primary">{target.ip}</h3>
-                <StatusBadge status={getStatusColor(status?.status)} label={status?.status || 'unknown'} />
+                <StatusBadge
+                  status={monitoringStateColors[target.monitoring_state] || 'unknown'}
+                  label={monitoringStateLabels[target.monitoring_state] || 'Unknown'}
+                />
                 {hasExpectedOutcome && <span className="text-xs px-1.5 py-0.5 bg-surface-tertiary text-theme-muted rounded">Expected Fail</span>}
               </div>
               {editingDescription ? (
@@ -771,6 +972,15 @@ export function TargetDetail() {
                     <Edit2 className="w-3.5 h-3.5" />
                   </button>
                 </div>
+              )}
+              {target.subnet_id && (
+                <Link
+                  to={`/subnets/${target.subnet_id}`}
+                  className="flex items-center gap-1.5 text-sm text-theme-muted hover:text-pilot-cyan mt-1"
+                >
+                  <Network className="w-3.5 h-3.5" />
+                  <span>{target.tags?.subnet || 'View Subnet'}</span>
+                </Link>
               )}
             </div>
             <div className="flex gap-2">
@@ -828,7 +1038,8 @@ export function TargetDetail() {
           </div>
 
           {/* Metrics Grid */}
-          <div className="grid grid-cols-2 md:grid-cols-6 gap-4 mb-6">
+          <div className="grid grid-cols-2 md:grid-cols-7 gap-4 mb-6">
+            <MetricCardCompact title="State" value={<StatusBadge status={monitoringStateColors[target.monitoring_state] || 'unknown'} label={monitoringStateLabels[target.monitoring_state] || 'Unknown'} size="sm" />} />
             <MetricCardCompact title="Tier" value={<span className={`px-2 py-0.5 rounded text-xs font-medium capitalize ${tierColors[target.tier] || 'bg-gray-500/20 text-theme-muted'}`}>{target.tier}</span>} />
             <MetricCardCompact title="Avg Latency" value={status?.avg_latency_ms != null ? `${status.avg_latency_ms.toFixed(1)}ms` : '—'} />
             <MetricCardCompact title="Min/Max" value={status?.min_latency_ms != null ? `${status.min_latency_ms.toFixed(0)}/${status.max_latency_ms?.toFixed(0)}ms` : '—'} />
@@ -869,31 +1080,78 @@ export function TargetDetail() {
             ) : (
               <>
                 {perAgentHistory.length > 0 && (
-                  <div className="flex flex-wrap gap-2 mb-3">
+                  <div className="mb-3">
                     {(() => {
                       const uniqueAgents = {};
+                      let inMarketIdx = 0;
+                      let crossMarketIdx = 0;
                       perAgentHistory.forEach(p => {
                         if (!uniqueAgents[p.agent_id]) {
-                          uniqueAgents[p.agent_id] = { id: p.agent_id, name: p.agent_name, color: agentColors[Object.keys(uniqueAgents).length % agentColors.length] };
+                          const isInMarket = p.is_in_market === true;
+                          const color = isInMarket
+                            ? inMarketColors[inMarketIdx++ % inMarketColors.length]
+                            : crossMarketColors[crossMarketIdx++ % crossMarketColors.length];
+                          uniqueAgents[p.agent_id] = {
+                            id: p.agent_id,
+                            name: p.agent_name,
+                            region: p.agent_region || 'Unknown',
+                            isInMarket,
+                            color,
+                          };
                         }
                       });
-                      return Object.values(uniqueAgents).map(agent => {
+                      const allAgents = Object.values(uniqueAgents);
+                      const inMarketAgents = allAgents.filter(a => a.isInMarket);
+                      const crossMarketAgents = allAgents.filter(a => !a.isInMarket);
+
+                      const AgentButton = ({ agent }) => {
                         const isVisible = visibleChartAgents.length === 0 || visibleChartAgents.includes(agent.id);
                         return (
-                          <button key={agent.id} onClick={() => {
-                            if (visibleChartAgents.length === 0) setVisibleChartAgents([agent.id]);
-                            else if (visibleChartAgents.includes(agent.id)) {
-                              const newVisible = visibleChartAgents.filter(id => id !== agent.id);
-                              setVisibleChartAgents(newVisible.length === 0 ? [] : newVisible);
-                            } else setVisibleChartAgents([...visibleChartAgents, agent.id]);
-                          }} className={`flex items-center gap-1.5 px-2 py-1 rounded text-xs transition-colors ${isVisible ? 'bg-surface-tertiary text-theme-primary' : 'bg-surface-primary text-theme-muted'}`}>
+                          <button
+                            onClick={() => {
+                              if (visibleChartAgents.length === 0) setVisibleChartAgents([agent.id]);
+                              else if (visibleChartAgents.includes(agent.id)) {
+                                const newVisible = visibleChartAgents.filter(id => id !== agent.id);
+                                setVisibleChartAgents(newVisible.length === 0 ? [] : newVisible);
+                              } else setVisibleChartAgents([...visibleChartAgents, agent.id]);
+                            }}
+                            className={`flex items-center gap-1.5 px-2 py-1 rounded text-xs transition-colors ${isVisible ? 'bg-surface-tertiary text-theme-primary' : 'bg-surface-primary text-theme-muted'}`}
+                          >
                             <span className="w-2 h-2 rounded-full" style={{ backgroundColor: isVisible ? agent.color : '#4B5563' }} />
                             {agent.name}
+                            <span className="text-theme-muted text-[10px]">({agent.region})</span>
                           </button>
                         );
-                      });
+                      };
+
+                      return (
+                        <div className="space-y-2">
+                          {inMarketAgents.length > 0 && (
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="text-xs font-medium text-status-healthy flex items-center gap-1">
+                                <span className="w-1.5 h-1.5 rounded-full bg-status-healthy"></span>
+                                In-Market
+                              </span>
+                              {inMarketAgents.map(agent => <AgentButton key={agent.id} agent={agent} />)}
+                            </div>
+                          )}
+                          {crossMarketAgents.length > 0 && (
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="text-xs font-medium text-theme-muted flex items-center gap-1">
+                                <span className="w-1.5 h-1.5 rounded-full bg-theme-muted"></span>
+                                Cross-Market
+                              </span>
+                              {crossMarketAgents.map(agent => <AgentButton key={agent.id} agent={agent} />)}
+                            </div>
+                          )}
+                          {visibleChartAgents.length > 0 && (
+                            <button onClick={() => setVisibleChartAgents([])} className="text-xs text-pilot-cyan hover:text-pilot-cyan-light">
+                              Show All
+                            </button>
+                          )}
+                        </div>
+                      );
                     })()}
-                    {visibleChartAgents.length > 0 && <button onClick={() => setVisibleChartAgents([])} className="text-xs text-pilot-cyan hover:text-pilot-cyan-light">Show All</button>}
                   </div>
                 )}
 
@@ -909,12 +1167,20 @@ export function TargetDetail() {
           {/* MTR Results */}
           {mtrResult && (
             <div className="mb-6 border-t border-theme pt-4">
-              <h4 className="text-sm font-medium text-theme-muted mb-3">MTR Results</h4>
+              <div className="flex items-center justify-between mb-3">
+                <h4 className="text-sm font-medium text-theme-muted">MTR Results</h4>
+                {mtrResult.status === 'pending' && (
+                  <div className="flex items-center gap-2 text-theme-muted text-xs">
+                    <RefreshCw className="w-3 h-3 animate-spin" />
+                    <span>Collecting results... ({mtrResult.results?.length || 0} received)</span>
+                  </div>
+                )}
+              </div>
               {mtrResult.error ? (
                 <div className="text-pilot-red text-sm">{mtrResult.error}</div>
-              ) : mtrResult.status === 'pending' ? (
+              ) : mtrResult.status === 'pending' && !mtrResult.results?.length ? (
                 <div className="flex items-center gap-2 text-theme-muted"><RefreshCw className="w-4 h-4 animate-spin" /><span>Waiting for results from agents...</span></div>
-              ) : mtrResult.status === 'timeout' ? (
+              ) : mtrResult.status === 'timeout' && !mtrResult.results?.length ? (
                 <div className="text-warning text-sm">{mtrResult.message}</div>
               ) : mtrResult.results?.length > 0 ? (
                 <div className="space-y-4">
@@ -930,7 +1196,7 @@ export function TargetDetail() {
                           {result.success ? (result.payload?.reached_dst ? 'Reached' : 'Unreachable') : 'Failed'}
                         </span>
                       </div>
-                      {result.success && result.payload?.hops?.length > 0 ? (
+                      {result.payload?.hops?.length > 0 ? (
                         <div className="overflow-x-auto">
                           <table className="w-full text-xs font-mono">
                             <thead>
@@ -946,35 +1212,193 @@ export function TargetDetail() {
                               </tr>
                             </thead>
                             <tbody>
-                              {result.payload.hops.map((hop) => (
-                                <tr key={hop.number} className="text-theme-secondary border-b border-theme/50">
-                                  <td className="py-1 pr-4 text-theme-muted">{hop.number}.</td>
-                                  <td className="py-1 pr-4 text-theme-primary">{hop.host || '???'}</td>
-                                  <td className={`text-right py-1 px-2 ${hop.loss_pct > 0 ? 'text-pilot-red' : ''}`}>{hop.loss_pct?.toFixed(1)}%</td>
-                                  <td className="text-right py-1 px-2">{hop.sent}</td>
-                                  <td className="text-right py-1 px-2">{hop.avg_ms?.toFixed(1)}</td>
-                                  <td className="text-right py-1 px-2 text-status-healthy">{hop.best_ms?.toFixed(1)}</td>
-                                  <td className="text-right py-1 px-2 text-accent">{hop.worst_ms?.toFixed(1)}</td>
-                                  <td className="text-right py-1 pl-2">{hop.stddev_ms?.toFixed(1)}</td>
-                                </tr>
-                              ))}
+                              {result.payload.hops.map((hop, hopIdx) => {
+                                const isLastHop = hopIdx === result.payload.hops.length - 1;
+                                const isUnreachable = !result.payload.reached_dst && isLastHop;
+                                return (
+                                  <tr key={hop.number} className={`text-theme-secondary border-b border-theme/50 ${isUnreachable ? 'bg-pilot-red/10' : ''}`}>
+                                    <td className="py-1 pr-4 text-theme-muted">{hop.number}.</td>
+                                    <td className={`py-1 pr-4 ${isUnreachable ? 'text-pilot-red' : 'text-theme-primary'}`}>
+                                      {hop.host || '???'}
+                                      {isUnreachable && hop.loss_pct >= 100 && <span className="ml-2 text-[10px] text-pilot-red">(unreachable)</span>}
+                                    </td>
+                                    <td className={`text-right py-1 px-2 ${hop.loss_pct > 0 ? 'text-pilot-red' : ''}`}>{hop.loss_pct?.toFixed(1)}%</td>
+                                    <td className="text-right py-1 px-2">{hop.sent}</td>
+                                    <td className="text-right py-1 px-2">{hop.avg_ms?.toFixed(1) || '—'}</td>
+                                    <td className="text-right py-1 px-2 text-status-healthy">{hop.best_ms?.toFixed(1) || '—'}</td>
+                                    <td className="text-right py-1 px-2 text-accent">{hop.worst_ms?.toFixed(1) || '—'}</td>
+                                    <td className="text-right py-1 pl-2">{hop.stddev_ms?.toFixed(1) || '—'}</td>
+                                  </tr>
+                                );
+                              })}
                             </tbody>
                           </table>
-                          {result.payload.reached_dst && (
-                            <div className="mt-2 text-xs text-theme-muted">
+                          {result.payload.reached_dst ? (
+                            <div className="mt-2 text-xs text-status-healthy">
                               Destination reached in {result.payload.total_hops} hops, avg latency: {result.payload.dst_latency_ms?.toFixed(1)}ms
+                            </div>
+                          ) : (
+                            <div className="mt-2 text-xs text-pilot-red">
+                              Destination unreachable after {result.payload.total_hops} hops
                             </div>
                           )}
                         </div>
-                      ) : result.success ? (
-                        <div className="text-theme-muted text-sm">No hops recorded</div>
-                      ) : null}
-                      {result.error && <div className="text-pilot-red text-sm">{result.error}</div>}
+                      ) : (
+                        <div className="text-theme-muted text-sm">{result.error || 'No hops recorded'}</div>
+                      )}
+                      {result.error && result.payload?.hops?.length > 0 && <div className="text-pilot-red text-sm mt-1">{result.error}</div>}
                     </div>
                   ))}
                 </div>
               ) : (
                 <div className="text-theme-muted text-sm">No results yet</div>
+              )}
+            </div>
+          )}
+
+          {/* Command History */}
+          {commandHistory.length > 0 && (
+            <div className="mb-6 border-t border-theme pt-4">
+              <div className="flex items-center justify-between mb-3">
+                <h4 className="text-sm font-medium text-theme-muted">Diagnostic History</h4>
+                {historicalMtrResult && (
+                  <button
+                    onClick={() => setHistoricalMtrResult(null)}
+                    className="text-xs text-theme-muted hover:text-theme-primary"
+                  >
+                    Close historical view
+                  </button>
+                )}
+              </div>
+              <div className="space-y-2">
+                {commandHistory.map((cmd) => (
+                  <div key={cmd.id} className={`flex items-center justify-between bg-surface-primary rounded-lg px-3 py-2 text-sm ${historicalMtrResult?.commandId === cmd.id ? 'ring-1 ring-pilot-cyan' : ''}`}>
+                    <div className="flex items-center gap-3">
+                      <span className="text-theme-muted uppercase text-xs font-medium w-10">{cmd.command_type}</span>
+                      <span className="text-theme-secondary">{formatRelativeTime(cmd.requested_at)}</span>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      {cmd.status === 'completed' ? (
+                        <span className="text-xs">
+                          <span className="text-status-healthy">{cmd.success_count}</span>
+                          <span className="text-theme-muted"> / </span>
+                          <span className={cmd.failure_count > 0 ? 'text-pilot-red' : 'text-theme-muted'}>{cmd.result_count}</span>
+                          <span className="text-theme-muted"> agents</span>
+                        </span>
+                      ) : cmd.status === 'pending' ? (
+                        <span className="text-xs text-theme-muted flex items-center gap-1">
+                          <RefreshCw className="w-3 h-3 animate-spin" /> pending
+                        </span>
+                      ) : (
+                        <span className="text-xs text-theme-muted">{cmd.status}</span>
+                      )}
+                      <button
+                        onClick={() => {
+                          if (historicalMtrResult?.commandId === cmd.id) {
+                            setHistoricalMtrResult(null);
+                          } else {
+                            endpoints.getCommand(cmd.id).then(res => {
+                              setHistoricalMtrResult({
+                                commandId: cmd.id,
+                                timestamp: cmd.requested_at,
+                                commandType: cmd.command_type,
+                                results: res.results || []
+                              });
+                            }).catch(err => console.error('Failed to load command:', err));
+                          }
+                        }}
+                        className={`text-xs ${historicalMtrResult?.commandId === cmd.id ? 'text-theme-muted' : 'text-pilot-cyan hover:text-pilot-cyan/80'}`}
+                      >
+                        {historicalMtrResult?.commandId === cmd.id ? 'Hide' : 'View'}
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Historical Results Display */}
+              {historicalMtrResult && historicalMtrResult.results?.length > 0 && (
+                <div className="mt-4 bg-surface-tertiary/50 rounded-lg p-4 border border-theme">
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-medium text-theme-muted uppercase">{historicalMtrResult.commandType}</span>
+                      <span className="text-theme-muted">•</span>
+                      <span className="text-xs text-accent">
+                        {new Date(historicalMtrResult.timestamp).toLocaleString()}
+                      </span>
+                    </div>
+                    <span className="text-xs text-theme-muted bg-surface-primary px-2 py-0.5 rounded">
+                      Historical
+                    </span>
+                  </div>
+                  <div className="space-y-4">
+                    {historicalMtrResult.results.map((result, idx) => (
+                      <div key={idx} className="bg-surface-primary rounded-lg p-3">
+                        <div className="flex items-center justify-between mb-3">
+                          <div className="flex items-center gap-2">
+                            <span className="text-theme-primary font-medium">{result.agent_name}</span>
+                            <span className="text-theme-muted">→</span>
+                            <span className="text-theme-muted font-mono">{result.payload?.target}</span>
+                          </div>
+                          <span className={`text-sm ${result.success ? 'text-status-healthy' : 'text-pilot-red'}`}>
+                            {result.success ? (result.payload?.reached_dst ? 'Reached' : 'Unreachable') : 'Failed'}
+                          </span>
+                        </div>
+                        {result.payload?.hops?.length > 0 ? (
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-xs font-mono">
+                              <thead>
+                                <tr className="text-theme-muted border-b border-theme">
+                                  <th className="text-left py-1 pr-4">#</th>
+                                  <th className="text-left py-1 pr-4">Host</th>
+                                  <th className="text-right py-1 px-2">Loss%</th>
+                                  <th className="text-right py-1 px-2">Sent</th>
+                                  <th className="text-right py-1 px-2">Avg</th>
+                                  <th className="text-right py-1 px-2">Best</th>
+                                  <th className="text-right py-1 px-2">Worst</th>
+                                  <th className="text-right py-1 pl-2">StDev</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {result.payload.hops.map((hop, hopIdx) => {
+                                  const isLastHop = hopIdx === result.payload.hops.length - 1;
+                                  const isUnreachable = !result.payload.reached_dst && isLastHop;
+                                  return (
+                                    <tr key={hop.number} className={`text-theme-secondary border-b border-theme/50 ${isUnreachable ? 'bg-pilot-red/10' : ''}`}>
+                                      <td className="py-1 pr-4 text-theme-muted">{hop.number}.</td>
+                                      <td className={`py-1 pr-4 ${isUnreachable ? 'text-pilot-red' : 'text-theme-primary'}`}>
+                                        {hop.host || '???'}
+                                        {isUnreachable && hop.loss_pct >= 100 && <span className="ml-2 text-[10px] text-pilot-red">(unreachable)</span>}
+                                      </td>
+                                      <td className={`text-right py-1 px-2 ${hop.loss_pct > 0 ? 'text-pilot-red' : ''}`}>{hop.loss_pct?.toFixed(1)}%</td>
+                                      <td className="text-right py-1 px-2">{hop.sent}</td>
+                                      <td className="text-right py-1 px-2">{hop.avg_ms?.toFixed(1) || '—'}</td>
+                                      <td className="text-right py-1 px-2 text-status-healthy">{hop.best_ms?.toFixed(1) || '—'}</td>
+                                      <td className="text-right py-1 px-2 text-accent">{hop.worst_ms?.toFixed(1) || '—'}</td>
+                                      <td className="text-right py-1 pl-2">{hop.stddev_ms?.toFixed(1) || '—'}</td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                            {result.payload.reached_dst ? (
+                              <div className="mt-2 text-xs text-status-healthy">
+                                Destination reached in {result.payload.total_hops} hops, avg latency: {result.payload.dst_latency_ms?.toFixed(1)}ms
+                              </div>
+                            ) : (
+                              <div className="mt-2 text-xs text-pilot-red">
+                                Destination unreachable after {result.payload.total_hops} hops
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          <div className="text-theme-muted text-sm">{result.error || 'No hops recorded'}</div>
+                        )}
+                        {result.error && result.payload?.hops?.length > 0 && <div className="text-pilot-red text-sm mt-1">{result.error}</div>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
               )}
             </div>
           )}

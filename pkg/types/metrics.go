@@ -85,6 +85,9 @@ type TargetFilter struct {
 	// Filter by tier (any of these)
 	Tiers []string `json:"tiers,omitempty"`
 
+	// Filter by region (any of these) - filters by subnet region
+	Regions []string `json:"regions,omitempty"`
+
 	// Filter by tags (all must match) - legacy simple format
 	Tags map[string]string `json:"tags,omitempty"`
 
@@ -148,6 +151,7 @@ func (q *MetricsQuery) Validate() error {
 		"agent_provider": true,
 		"target":         true,
 		"target_tier":    true,
+		"target_region":  true,
 	}
 	for _, g := range q.GroupBy {
 		if !validGroupBy[g] {
@@ -223,6 +227,7 @@ type MetricsSeries struct {
 	TargetID      string `json:"target_id,omitempty"`
 	TargetIP      string `json:"target_ip,omitempty"`
 	TargetTier    string `json:"target_tier,omitempty"`
+	TargetRegion  string `json:"target_region,omitempty"`
 
 	// Time-series data points
 	Points []MetricsDataPoint `json:"points"`
@@ -271,16 +276,19 @@ func AutoSelectBucket(window time.Duration) string {
 }
 
 // SelectAggregateTable chooses the best pre-computed aggregate for the query.
-// Returns: "probe_results", "probe_hourly", "probe_daily", or "probe_monthly"
+// Returns: "probe_5min", "probe_hourly", "probe_daily", or "probe_monthly"
+// Note: We no longer use "probe_results" directly due to compression making it slow.
 func SelectAggregateTable(window time.Duration, bucket string) string {
 	bucketDuration, err := ParseDuration(bucket)
 	if err != nil {
 		bucketDuration = time.Hour // fallback
 	}
 
-	// Use raw data for very short windows (< 1h)
-	if window <= 1*time.Hour && bucketDuration < 1*time.Hour {
-		return "probe_results"
+	// Use 5-minute aggregate for windows up to 24 hours with sub-hourly buckets
+	// This provides good granularity while avoiding slow decompression of raw data
+	// The probe_5min aggregate can efficiently serve any bucket >= 5 minutes
+	if window <= 24*time.Hour && bucketDuration < 1*time.Hour {
+		return "probe_5min"
 	}
 
 	// Use hourly aggregate for windows up to 7 days

@@ -42,6 +42,15 @@ type PilotSyncStore interface {
 
 	// UpdateTargetTagsBySubnet updates tags on all targets in a subnet.
 	UpdateTargetTagsBySubnet(ctx context.Context, subnetID string, tags map[string]string) error
+
+	// UpdateSubnetServiceStatus updates just the service_status field.
+	UpdateSubnetServiceStatus(ctx context.Context, subnetID string, newStatus *string) (bool, error)
+
+	// TransitionTargetsByServiceCancellation moves all targets in subnet to INACTIVE.
+	TransitionTargetsByServiceCancellation(ctx context.Context, subnetID string) (int, error)
+
+	// ResolveAlertsBySubnet resolves all active alerts for the subnet.
+	ResolveAlertsBySubnet(ctx context.Context, subnetID string, reason string) (int, error)
 }
 
 // PilotSyncConfig holds configuration for the sync worker.
@@ -215,6 +224,7 @@ func (w *PilotSyncWorker) createSubnet(ctx context.Context, pool *pilot.IPPool) 
 		LastUsableAddress:  pool.LastUsableAddress,
 		VLANID:             pool.VLANID,
 		ServiceID:          pool.ServiceID,
+		ServiceStatus:      pool.ServiceStatus,
 		SubscriberID:       pool.SubscriberID,
 		SubscriberName:     pool.SubscriberName,
 		LocationID:         pool.LocationID,
@@ -238,7 +248,17 @@ func (w *PilotSyncWorker) createSubnet(ctx context.Context, pool *pilot.IPPool) 
 		"network", pool.NetworkAddress,
 		"type", pool.TypeString(),
 		"subscriber", pool.SubscriberName,
+		"service_status", pool.ServiceStatus,
 	)
+
+	// Don't auto-seed targets if the service is cancelled
+	if pool.ServiceStatus != nil && *pool.ServiceStatus == "cancelled" {
+		w.logger.Info("skipping target seeding for cancelled service",
+			"subnet_id", subnet.ID,
+			"network", subnet.NetworkAddress,
+		)
+		return nil
+	}
 
 	// Auto-seed targets for discovery
 	gatewayCreated, customerCount := w.seedSubnetTargets(ctx, subnet)
@@ -430,6 +450,12 @@ func calculateUsableIPs(subnet *types.Subnet) ([]string, error) {
 }
 
 func (w *PilotSyncWorker) updateSubnet(ctx context.Context, existing *types.Subnet, pool *pilot.IPPool) error {
+	// Check for service status change to "cancelled"
+	oldStatus := existing.ServiceStatus
+	newStatus := pool.ServiceStatus
+	becameCancelled := newStatus != nil && *newStatus == "cancelled" &&
+		(oldStatus == nil || *oldStatus != "cancelled")
+
 	// Update fields from Pilot
 	existing.NetworkAddress = pool.NetworkAddress
 	existing.NetworkSize = pool.NetworkSize
@@ -438,6 +464,7 @@ func (w *PilotSyncWorker) updateSubnet(ctx context.Context, existing *types.Subn
 	existing.LastUsableAddress = pool.LastUsableAddress
 	existing.VLANID = pool.VLANID
 	existing.ServiceID = pool.ServiceID
+	existing.ServiceStatus = pool.ServiceStatus
 	existing.SubscriberID = pool.SubscriberID
 	existing.SubscriberName = pool.SubscriberName
 	existing.LocationID = pool.LocationID
@@ -454,6 +481,11 @@ func (w *PilotSyncWorker) updateSubnet(ctx context.Context, existing *types.Subn
 		return err
 	}
 
+	// Handle service cancellation: stop monitoring and resolve alerts
+	if becameCancelled {
+		w.handleServiceCancellation(ctx, existing)
+	}
+
 	// Sync tags to all targets in this subnet (for point-in-time metadata accuracy)
 	tags := buildTargetTags(existing)
 	if err := w.store.UpdateTargetTagsBySubnet(ctx, existing.ID, tags); err != nil {
@@ -466,6 +498,44 @@ func (w *PilotSyncWorker) updateSubnet(ctx context.Context, existing *types.Subn
 	}
 
 	return nil
+}
+
+// handleServiceCancellation stops monitoring and resolves alerts for a cancelled service.
+func (w *PilotSyncWorker) handleServiceCancellation(ctx context.Context, subnet *types.Subnet) {
+	w.logger.Info("service cancelled - stopping monitoring",
+		"subnet_id", subnet.ID,
+		"network", subnet.NetworkAddress,
+		"subscriber", subnet.SubscriberName,
+		"service_id", subnet.ServiceID,
+	)
+
+	// 1. Transition all targets to INACTIVE state
+	targetsTransitioned, err := w.store.TransitionTargetsByServiceCancellation(ctx, subnet.ID)
+	if err != nil {
+		w.logger.Error("failed to transition targets for cancelled service",
+			"subnet_id", subnet.ID,
+			"error", err,
+		)
+	} else if targetsTransitioned > 0 {
+		w.logger.Info("targets transitioned to INACTIVE for cancelled service",
+			"subnet_id", subnet.ID,
+			"targets_affected", targetsTransitioned,
+		)
+	}
+
+	// 2. Resolve all active alerts for this subnet
+	alertsResolved, err := w.store.ResolveAlertsBySubnet(ctx, subnet.ID, "Service cancelled in Flight Deck")
+	if err != nil {
+		w.logger.Error("failed to resolve alerts for cancelled service",
+			"subnet_id", subnet.ID,
+			"error", err,
+		)
+	} else if alertsResolved > 0 {
+		w.logger.Info("alerts resolved for cancelled service",
+			"subnet_id", subnet.ID,
+			"alerts_resolved", alertsResolved,
+		)
+	}
 }
 
 func (w *PilotSyncWorker) subnetNeedsUpdate(existing *types.Subnet, pool *pilot.IPPool) bool {
@@ -483,6 +553,10 @@ func (w *PilotSyncWorker) subnetNeedsUpdate(existing *types.Subnet, pool *pilot.
 		return true
 	}
 	if ptrIntNotEqual(existing.SubnetType, pool.SubnetType) {
+		return true
+	}
+	// Check for service status changes (important for cancellation handling)
+	if ptrStringNotEqual(existing.ServiceStatus, pool.ServiceStatus) {
 		return true
 	}
 	return false

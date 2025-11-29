@@ -126,3 +126,22 @@ func (b *ResultBuffer) Len(ctx context.Context) (int64, error) {
 func (b *ResultBuffer) Close() error {
 	return b.client.Close()
 }
+
+// GetStats returns current buffer statistics for health monitoring.
+func (b *ResultBuffer) GetStats(ctx context.Context) (types.BufferStats, error) {
+	stats := types.BufferStats{
+		Connected: true,
+	}
+
+	// Get queue depth
+	depth, err := b.Len(ctx)
+	if err != nil {
+		return types.BufferStats{Connected: false}, err
+	}
+	stats.QueueDepth = depth
+
+	// Flush rate is tracked by the Flusher, not the buffer itself
+	// The buffer can only report queue depth and connectivity
+
+	return stats, nil
+}

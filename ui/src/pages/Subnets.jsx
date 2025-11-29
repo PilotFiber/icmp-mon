@@ -258,6 +258,7 @@ export function Subnets() {
   const initialPage = parseInt(searchParams.get('page') || '1', 10);
   const initialSearch = searchParams.get('search') || '';
   const initialPop = searchParams.get('pop') || '';
+  const initialServiceStatus = searchParams.get('service_status') || '';
   const initialIncludeArchived = searchParams.get('archived') === 'true';
 
   const [subnets, setSubnets] = useState([]);
@@ -272,6 +273,7 @@ export function Subnets() {
   const [search, setSearch] = useState(initialSearch);
   const [searchInput, setSearchInput] = useState(initialSearch);
   const [popFilter, setPopFilter] = useState(initialPop);
+  const [serviceStatusFilter, setServiceStatusFilter] = useState(initialServiceStatus);
   const [includeArchived, setIncludeArchived] = useState(initialIncludeArchived);
 
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -293,9 +295,10 @@ export function Subnets() {
     if (currentPage > 1) params.set('page', currentPage.toString());
     if (search) params.set('search', search);
     if (popFilter) params.set('pop', popFilter);
+    if (serviceStatusFilter) params.set('service_status', serviceStatusFilter);
     if (includeArchived) params.set('archived', 'true');
     setSearchParams(params, { replace: true });
-  }, [currentPage, search, popFilter, includeArchived, setSearchParams]);
+  }, [currentPage, search, popFilter, serviceStatusFilter, includeArchived, setSearchParams]);
 
   const fetchData = useCallback(async () => {
     try {
@@ -308,6 +311,7 @@ export function Subnets() {
         limit: PAGE_SIZE,
         offset,
         pop: popFilter,
+        service_status: serviceStatusFilter,
         search,
         includeArchived,
       });
@@ -320,7 +324,7 @@ export function Subnets() {
     } finally {
       setLoading(false);
     }
-  }, [currentPage, search, popFilter, includeArchived]);
+  }, [currentPage, search, popFilter, serviceStatusFilter, includeArchived]);
 
   useEffect(() => {
     fetchData();
@@ -341,6 +345,11 @@ export function Subnets() {
 
   const handlePopChange = (value) => {
     setPopFilter(value);
+    setCurrentPage(1);
+  };
+
+  const handleServiceStatusChange = (value) => {
+    setServiceStatusFilter(value);
     setCurrentPage(1);
   };
 
@@ -431,6 +440,15 @@ export function Subnets() {
               placeholder="Filter by POP"
               className="px-3 py-2 bg-surface-primary border border-theme rounded-lg text-theme-primary placeholder-theme-muted focus:outline-none focus:ring-2 focus:ring-pilot-cyan w-40 text-sm"
             />
+            <select
+              value={serviceStatusFilter}
+              onChange={(e) => handleServiceStatusChange(e.target.value)}
+              className="px-3 py-2 bg-surface-primary border border-theme rounded-lg text-theme-primary focus:outline-none focus:ring-2 focus:ring-pilot-cyan text-sm"
+            >
+              <option value="">All Service Status</option>
+              <option value="active">Active Services</option>
+              <option value="cancelled">Cancelled Services</option>
+            </select>
             <label className="flex items-center gap-2 text-sm text-theme-secondary cursor-pointer">
               <input
                 type="checkbox"
@@ -440,7 +458,7 @@ export function Subnets() {
               />
               Include archived
             </label>
-            {(search || popFilter || includeArchived) && (
+            {(search || popFilter || serviceStatusFilter || includeArchived) && (
               <Button
                 variant="ghost"
                 size="sm"
@@ -448,6 +466,7 @@ export function Subnets() {
                   setSearchInput('');
                   setSearch('');
                   setPopFilter('');
+                  setServiceStatusFilter('');
                   setIncludeArchived(false);
                   setCurrentPage(1);
                 }}
@@ -537,6 +556,8 @@ export function Subnets() {
                       <TableCell>
                         {subnet.archived_at ? (
                           <StatusBadge status="down" label="Archived" size="sm" />
+                        ) : subnet.service_status === 'cancelled' ? (
+                          <StatusBadge status="down" label="Service Cancelled" size="sm" />
                         ) : (
                           <StatusBadge status="healthy" label="Active" size="sm" />
                         )}

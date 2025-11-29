@@ -105,6 +105,7 @@ type Alert struct {
 
 	// Subnet/Pilot enriched metadata - for correlated alerting
 	SubnetID         string `json:"subnet_id,omitempty"`
+	SubnetCIDR       string `json:"subnet_cidr,omitempty"` // e.g., "10.1.2.0/24"
 	SubscriberName   string `json:"subscriber_name,omitempty"`
 	ServiceID        int    `json:"service_id,omitempty"`
 	LocationID       int    `json:"location_id,omitempty"`

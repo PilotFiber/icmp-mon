@@ -4,6 +4,7 @@ export function MetricCard({
   title,
   value,
   unit = '',
+  subtitle = '',
   change = null,
   changeLabel = '',
   icon: Icon = null,
@@ -59,6 +60,9 @@ export function MetricCard({
               <span className="text-xs text-theme-muted">{unit}</span>
             )}
           </div>
+          {subtitle && (
+            <p className="text-xs text-theme-muted mt-0.5">{subtitle}</p>
+          )}
           {change !== null && (
             <div className={`flex items-center gap-1 mt-1 ${getTrendColor()}`}>
               {getTrendIcon()}

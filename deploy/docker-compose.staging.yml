@@ -95,6 +95,10 @@ services:
       # Flight Deck subnet sync (optional)
       FD_API_URL: ${FD_API_URL:-}
       FD_BEARER: ${FD_BEARER:-}
+      # Tailscale auth key for agent enrollment (optional)
+      TAILSCALE_AUTH_KEY: ${TAILSCALE_AUTH_KEY:-}
+      # Control plane URL for agent configuration
+      CONTROL_PLANE_URL: ${CONTROL_PLANE_URL:-}
     expose:
       - "8080"
     depends_on:

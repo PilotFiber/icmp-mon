@@ -101,9 +101,11 @@ BEGIN
     JOIN agents a ON ats.agent_id = a.id
     WHERE (ats.status IN ('down', 'degraded')
        OR ats.current_z_score > 3
-       OR ats.current_packet_loss > 5)
+       OR ats.current_packet_loss > 20)
       AND t.archived_at IS NULL  -- Exclude archived targets
-      AND a.archived_at IS NULL; -- Exclude archived agents
+      AND a.archived_at IS NULL  -- Exclude archived agents
+      AND t.baseline_established_at IS NOT NULL  -- Only alertable targets (have baseline)
+      AND t.monitoring_state IN ('active', 'degraded', 'down');  -- Only alertable states
 END;
 $$ LANGUAGE plpgsql;
 

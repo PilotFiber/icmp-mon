@@ -74,7 +74,7 @@ func DefaultEvaluatorWorkerConfig() EvaluatorWorkerConfig {
 		MinSamplesForBaseline:      100,
 		ZScoreWarningThreshold:     3.0,
 		ZScoreCriticalThreshold:    5.0,
-		PacketLossWarningPct:       5.0,
+		PacketLossWarningPct:       20.0,
 		PacketLossCriticalPct:      20.0,
 		ConsecutiveFailuresForDown: 3,
 		ConsecutiveSuccessesForUp:  3,

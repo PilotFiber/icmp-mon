@@ -74,6 +74,7 @@ const GROUP_BY_OPTIONS = [
   { value: 'time', label: 'Time only (single series)' },
   { value: 'agent_region', label: 'By Agent Region' },
   { value: 'agent_provider', label: 'By Agent Provider' },
+  { value: 'target_region', label: 'By Target Region' },
   { value: 'target_tier', label: 'By Target Tier' },
   { value: 'agent', label: 'By Individual Agent' },
 ];
@@ -498,12 +499,14 @@ export function MetricsExplorer() {
 
   // Target filter state
   const [targetTiers, setTargetTiers] = useState([]);
+  const [targetRegions, setTargetRegions] = useState([]);
   const [targetTagFilters, setTargetTagFilters] = useState([]); // Array of {key, operator, value}
 
   // Available options (from API)
   const [availableRegions, setAvailableRegions] = useState([]);
   const [availableProviders, setAvailableProviders] = useState([]);
   const [availableTiers, setAvailableTiers] = useState([]);
+  const [availableTargetRegions, setAvailableTargetRegions] = useState([]);
   const [availableTargetTagKeys, setAvailableTargetTagKeys] = useState([]);
   const [availableAgentTagKeys, setAvailableAgentTagKeys] = useState([]);
   const [optionsLoading, setOptionsLoading] = useState(true);
@@ -518,20 +521,25 @@ export function MetricsExplorer() {
     const fetchOptions = async () => {
       try {
         setOptionsLoading(true);
-        const [agentsRes, tiersRes, targetTagKeysRes] = await Promise.all([
+        const [agentsRes, tiersRes, targetTagKeysRes, subnetsRes] = await Promise.all([
           endpoints.listAgents(),
           endpoints.listTiers(),
           endpoints.getTargetTagKeys().catch(() => ({ keys: [] })), // Fallback if endpoint unavailable
+          endpoints.listSubnets().catch(() => ({ subnets: [] })), // Fallback if endpoint unavailable
         ]);
 
         const agents = agentsRes.agents || [];
         const tiers = tiersRes.tiers || [];
         const targetTagKeys = targetTagKeysRes.keys || [];
+        const subnets = subnetsRes.subnets || [];
 
-        // Extract unique regions and providers
+        // Extract unique regions and providers from agents
         const regions = [...new Set(agents.map((a) => a.region).filter(Boolean))];
         const providers = [...new Set(agents.map((a) => a.provider).filter(Boolean))];
         const tierNames = tiers.map((t) => t.name);
+
+        // Extract unique regions from subnets (for target regions)
+        const targetRegions = [...new Set(subnets.map((s) => s.region).filter(Boolean))].sort();
 
         // Extract unique tag keys from agents
         const agentTagKeys = [...new Set(
@@ -541,6 +549,7 @@ export function MetricsExplorer() {
         setAvailableRegions(regions);
         setAvailableProviders(providers);
         setAvailableTiers(tierNames);
+        setAvailableTargetRegions(targetRegions);
         setAvailableTargetTagKeys(targetTagKeys);
         setAvailableAgentTagKeys(agentTagKeys);
       } catch (err) {
@@ -570,9 +579,10 @@ export function MetricsExplorer() {
     }
 
     // Add target filter if any filters are set
-    if (targetTiers.length > 0 || targetTagFilters.length > 0) {
+    if (targetTiers.length > 0 || targetRegions.length > 0 || targetTagFilters.length > 0) {
       query.target_filter = {};
       if (targetTiers.length > 0) query.target_filter.tiers = targetTiers;
+      if (targetRegions.length > 0) query.target_filter.regions = targetRegions;
       if (targetTagFilters.length > 0) query.target_filter.tag_filters = targetTagFilters;
     }
 
@@ -669,7 +679,7 @@ export function MetricsExplorer() {
   const seriesNames = useMemo(() => {
     if (!result || !result.series) return [];
     return result.series.map((s, idx) =>
-      s.agent_region || s.agent_provider || s.agent_name || s.target_tier || `Series ${idx + 1}`
+      s.agent_region || s.agent_provider || s.agent_name || s.target_region || s.target_tier || `Series ${idx + 1}`
     );
   }, [result]);
 
@@ -679,12 +689,13 @@ export function MetricsExplorer() {
     setAgentProviders([]);
     setAgentTagFilters([]);
     setTargetTiers([]);
+    setTargetRegions([]);
     setTargetTagFilters([]);
   };
 
   const hasFilters = agentRegions.length > 0 || agentProviders.length > 0 ||
     agentTagFilters.length > 0 || targetTiers.length > 0 ||
-    targetTagFilters.length > 0;
+    targetRegions.length > 0 || targetTagFilters.length > 0;
 
   return (
     <>
@@ -786,6 +797,14 @@ export function MetricsExplorer() {
                 Target Filters
               </CardTitle>
               <CardContent className="space-y-4">
+                <ChipSelector
+                  label="Regions"
+                  options={availableTargetRegions}
+                  selected={targetRegions}
+                  onChange={setTargetRegions}
+                  loading={optionsLoading}
+                />
+
                 <ChipSelector
                   label="Tiers"
                   options={availableTiers}
@@ -942,7 +961,7 @@ export function MetricsExplorer() {
                       <div className="text-xs text-theme-muted mb-2">Series Breakdown</div>
                       <div className="flex flex-wrap gap-2">
                         {result.series.map((s, idx) => {
-                          const name = s.agent_region || s.agent_provider || s.agent_name || s.target_tier || `Series ${idx + 1}`;
+                          const name = s.agent_region || s.agent_provider || s.agent_name || s.target_region || s.target_tier || `Series ${idx + 1}`;
                           return (
                             <span
                               key={idx}

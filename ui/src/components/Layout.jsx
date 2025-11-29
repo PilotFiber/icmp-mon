@@ -14,6 +14,8 @@ import {
   Moon,
   Network,
   ClipboardCheck,
+  Grid,
+  Database,
 } from 'lucide-react';
 import { useTheme } from '../context/ThemeContext';
 import { PilotLogo } from './PilotLogo';
@@ -21,11 +23,13 @@ import { PilotLogo } from './PilotLogo';
 const navigation = [
   { name: 'Dashboard', href: '/', icon: Activity },
   { name: 'Agents', href: '/agents', icon: Server },
+  { name: 'Infrastructure', href: '/infrastructure', icon: Database },
   { name: 'Fleet Management', href: '/fleet', icon: Rocket },
   { name: 'Targets', href: '/targets', icon: Target },
   { name: 'Subnets', href: '/subnets', icon: Network },
   { name: 'Review Queue', href: '/review', icon: ClipboardCheck },
   { name: 'Metrics Explorer', href: '/metrics', icon: BarChart3 },
+  { name: 'Latency Matrix', href: '/latency-matrix', icon: Grid },
   { name: 'Incidents', href: '/incidents', icon: AlertCircle },
   { name: 'Snapshots', href: '/snapshots', icon: Camera },
   { name: 'Alerts', href: '/alerts', icon: Bell },

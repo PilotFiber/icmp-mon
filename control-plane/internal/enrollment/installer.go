@@ -10,12 +10,16 @@ import (
 
 // AgentConfig holds configuration for the agent.
 type AgentConfig struct {
-	ControlPlaneURL string
-	AgentName       string
-	Region          string
-	Location        string
-	Provider        string
-	Tags            map[string]string
+	ControlPlaneURL    string
+	AgentName          string
+	Region             string
+	Location           string
+	Provider           string
+	Tags               map[string]string
+	InsecureSkipVerify bool // Skip TLS certificate verification (for staging/testing)
+
+	// Security configuration
+	APIKey string // Plaintext API key (written to agent config)
 }
 
 // InstallPaths contains paths for agent installation.
@@ -87,8 +91,9 @@ func DownloadAgentBinary(ctx context.Context, ssh *SSHClient, controlPlaneURL, p
 	// Download to temp location
 	tmpPath := fmt.Sprintf("/tmp/icmpmon-agent-%d", time.Now().UnixNano())
 
+	// Use -k to skip SSL verification (target may not have CA certs installed)
 	_, err := ssh.Run(ctx, fmt.Sprintf(
-		"curl -fsSL -o %s '%s' || wget -q -O %s '%s'",
+		"curl -fsSLk -o %s '%s' || wget -q --no-check-certificate -O %s '%s'",
 		tmpPath, downloadURL, tmpPath, downloadURL))
 	if err != nil {
 		return fmt.Errorf("downloading agent binary: %w", err)
@@ -145,6 +150,12 @@ func generateAgentConfig(cfg AgentConfig) string {
 
 control_plane:
   url: {{ .ControlPlaneURL }}
+{{- if .APIKey }}
+  api_key: {{ .APIKey }}
+{{- end }}
+{{- if .InsecureSkipVerify }}
+  insecure_skip_verify: true
+{{- end }}
 
 agent:
   name: {{ .AgentName }}

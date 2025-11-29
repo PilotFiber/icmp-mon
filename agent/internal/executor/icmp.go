@@ -280,8 +280,20 @@ func (e *ICMPExecutor) parseRTTValues(valuesStr string) ICMPPayload {
 		PacketsRecvd: packetsRecvd,
 	}
 
-	if packetsSent > 0 {
-		payload.PacketLoss = float64(packetsSent-packetsRecvd) / float64(packetsSent) * 100.0
+	// Calculate packet loss with 1-packet grace.
+	// Single packet drops are normal network jitter - only count loss after the first.
+	// With 3 packets: 0 lost→0%, 1 lost→0%, 2 lost→50%, 3 lost→100%
+	if packetsSent > 1 {
+		lostPackets := packetsSent - packetsRecvd
+		if lostPackets > 0 {
+			lostPackets-- // Free pass on first lost packet
+		}
+		payload.PacketLoss = float64(lostPackets) / float64(packetsSent-1) * 100.0
+	} else if packetsSent == 1 {
+		// Single packet probe: no grace, report actual loss
+		if packetsRecvd == 0 {
+			payload.PacketLoss = 100.0
+		}
 	}
 
 	if len(rtts) == 0 {

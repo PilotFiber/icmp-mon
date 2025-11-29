@@ -20,8 +20,13 @@ RUN go mod download
 # Copy source
 COPY . .
 
-# Build
+# Build control plane
 RUN CGO_ENABLED=0 GOOS=linux go build -o /bin/control-plane ./control-plane/cmd/server
+
+# Build agent binaries for distribution during enrollment
+RUN mkdir -p /binaries && \
+    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /binaries/agent-linux-amd64 ./agent/cmd/agent/ && \
+    CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o /binaries/agent-linux-arm64 ./agent/cmd/agent/
 
 # =============================================================================
 # Runtime image
@@ -44,6 +49,7 @@ RUN ARCH=$(case ${TARGETARCH:-$(uname -m)} in \
     chmod +x /usr/local/bin/op
 
 COPY --from=builder /bin/control-plane /bin/control-plane
+COPY --from=builder /binaries /opt/icmpmon/binaries
 
 # Non-root user
 RUN adduser -D -u 1000 icmpmon

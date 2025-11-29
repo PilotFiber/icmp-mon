@@ -27,28 +27,31 @@ import (
 type State string
 
 const (
-	StatePending         State = "pending"
-	StateConnecting      State = "connecting"
-	StateDetecting       State = "detecting"
-	StateKeyInstalling   State = "key_installing"
-	StateHardening       State = "hardening"
-	StateAgentInstalling State = "agent_installing"
-	StateStarting        State = "starting"
-	StateRegistering     State = "registering"
-	StateComplete        State = "complete"
-	StateFailed          State = "failed"
-	StateCancelled       State = "cancelled"
+	StatePending          State = "pending"
+	StateConnecting       State = "connecting"
+	StateDetecting        State = "detecting"
+	StateKeyInstalling    State = "key_installing"
+	StateHardening        State = "hardening"
+	StateTailscale        State = "tailscale"        // Install and configure Tailscale
+	StateDependencies     State = "dependencies"     // Install required packages (fping, mtr)
+	StateAgentInstalling  State = "agent_installing"
+	StateStarting         State = "starting"
+	StateRegistering      State = "registering"
+	StateComplete         State = "complete"
+	StateFailed           State = "failed"
+	StateCancelled        State = "cancelled"
 )
 
 // Event represents an enrollment progress event for SSE streaming.
 type Event struct {
-	Type      string    `json:"type"`       // "step", "log", "error", "complete"
-	Step      string    `json:"step,omitempty"`
-	State     State     `json:"state,omitempty"`
-	Message   string    `json:"message"`
-	Details   any       `json:"details,omitempty"`
-	Progress  int       `json:"progress,omitempty"` // 0-100
-	Timestamp time.Time `json:"timestamp"`
+	Type         string    `json:"type"`                    // "step", "log", "error", "complete"
+	Step         string    `json:"step,omitempty"`
+	State        State     `json:"state,omitempty"`
+	Message      string    `json:"message"`
+	Details      any       `json:"details,omitempty"`
+	Progress     int       `json:"progress,omitempty"`      // 0-100
+	EnrollmentID string    `json:"enrollment_id,omitempty"` // ID of the enrollment (for resume support)
+	Timestamp    time.Time `json:"timestamp"`
 }
 
 // EnrollRequest contains the parameters for enrolling a new agent.
@@ -71,6 +74,9 @@ type EnrollRequest struct {
 
 	// Requested by (for audit)
 	RequestedBy string `json:"requested_by,omitempty"`
+
+	// TryKeyFirst attempts SSH key auth before password (for re-enrollment of hardened servers)
+	TryKeyFirst bool `json:"try_key_first,omitempty"`
 }
 
 // Enrollment represents an enrollment session.
@@ -105,8 +111,16 @@ type Enrollment struct {
 	AgentID  string `json:"agent_id,omitempty"`
 	SSHKeyID string `json:"ssh_key_id,omitempty"`
 
+	// Security results
+	TailscaleIP  string `json:"tailscale_ip,omitempty"` // Tailscale IP assigned to agent
+	APIKey       string `json:"-"`                       // Plaintext API key (never serialized, shown once)
+	APIKeyHash   string `json:"-"`                       // bcrypt hash of API key (for DB storage)
+
 	// Rollback tracking
 	Changes []Change `json:"changes"`
+
+	// TryKeyFirst indicates whether to try SSH key auth before password
+	TryKeyFirst bool `json:"try_key_first,omitempty"`
 
 	// Error handling
 	LastError    string `json:"last_error,omitempty"`
@@ -158,6 +172,10 @@ type EnrollmentStore interface {
 // AgentChecker verifies agent registration with the control plane.
 type AgentChecker interface {
 	WaitForAgent(ctx context.Context, name string, timeout time.Duration) (agentID string, err error)
+	// SetAgentAPIKey stores the API key hash for an agent.
+	SetAgentAPIKey(ctx context.Context, agentID, keyHash string) error
+	// SetAgentTailscaleIP stores the Tailscale IP for an agent.
+	SetAgentTailscaleIP(ctx context.Context, agentID, tailscaleIP string) error
 }
 
 // Service orchestrates agent enrollment.
@@ -166,6 +184,12 @@ type Service struct {
 	keyStore secrets.KeyStore
 	checker  AgentChecker
 	logger   *slog.Logger
+
+	// Tailscale configuration
+	tailscaleConfig TailscaleConfig
+
+	// Control plane URL (agents will connect to this)
+	controlPlaneURL string
 
 	// Active enrollments
 	mu          sync.Mutex
@@ -183,6 +207,28 @@ func NewService(store EnrollmentStore, keyStore secrets.KeyStore, checker AgentC
 	}
 }
 
+// SetTailscaleConfig sets the Tailscale configuration for agent enrollment.
+// If auth key is empty, Tailscale enrollment will be skipped.
+func (s *Service) SetTailscaleConfig(config TailscaleConfig) {
+	s.tailscaleConfig = config
+	if config.AuthKey != "" {
+		s.logger.Info("tailscale enrollment enabled")
+	}
+}
+
+// SetControlPlaneURL sets the URL that agents will use to connect to the control plane.
+func (s *Service) SetControlPlaneURL(url string) {
+	s.controlPlaneURL = url
+	if url != "" {
+		s.logger.Info("control plane URL configured", "url", url)
+	}
+}
+
+// TailscaleEnabled returns true if Tailscale is configured for enrollment.
+func (s *Service) TailscaleEnabled() bool {
+	return s.tailscaleConfig.AuthKey != ""
+}
+
 // Enroll starts the enrollment process.
 // If events is non-nil, progress events are sent to it.
 // The password is used once for the initial SSH connection and never stored.
@@ -196,6 +242,13 @@ func (s *Service) Enroll(ctx context.Context, req EnrollRequest, events chan<- E
 	agentName := req.AgentName
 	if agentName == "" {
 		agentName = fmt.Sprintf("agent-%s", req.TargetIP)
+	}
+
+	// Use service's control plane URL (from environment) instead of request
+	controlPlaneURL := s.controlPlaneURL
+	if controlPlaneURL == "" {
+		// Fallback to request if service URL not configured (shouldn't happen in production)
+		controlPlaneURL = req.ControlPlaneURL
 	}
 
 	// Create enrollment record
@@ -213,8 +266,9 @@ func (s *Service) Enroll(ctx context.Context, req EnrollRequest, events chan<- E
 		StepsCompleted:  []string{},
 		Changes:         []Change{},
 		MaxRetries:      3,
-		ControlPlaneURL: req.ControlPlaneURL,
+		ControlPlaneURL: controlPlaneURL,
 		RequestedBy:     req.RequestedBy,
+		TryKeyFirst:     req.TryKeyFirst,
 		CreatedAt:       time.Now(),
 		UpdatedAt:       time.Now(),
 	}
@@ -270,7 +324,7 @@ func (s *Service) Cancel(ctx context.Context, enrollmentID string) error {
 	return nil
 }
 
-// Retry retries a failed enrollment.
+// Retry retries a failed enrollment with password auth.
 // If events is non-nil, progress events are sent to it.
 func (s *Service) Retry(ctx context.Context, enrollmentID string, password string, events chan<- Event) (*Enrollment, error) {
 	enrollment, err := s.store.GetEnrollment(ctx, enrollmentID)
@@ -311,6 +365,233 @@ func (s *Service) Retry(ctx context.Context, enrollmentID string, password strin
 	go s.runEnrollment(enrollCtx, enrollment, password, events)
 
 	return enrollment, nil
+}
+
+// Resume resumes a failed enrollment using SSH key authentication.
+// This can be used when the SSH key has already been installed (key_installing step completed).
+// If events is non-nil, progress events are sent to it.
+func (s *Service) Resume(ctx context.Context, enrollmentID string, events chan<- Event) (*Enrollment, error) {
+	enrollment, err := s.store.GetEnrollment(ctx, enrollmentID)
+	if err != nil {
+		return nil, err
+	}
+	if enrollment == nil {
+		return nil, fmt.Errorf("enrollment not found: %s", enrollmentID)
+	}
+
+	if enrollment.State != StateFailed {
+		return nil, fmt.Errorf("can only resume failed enrollments, current state: %s", enrollment.State)
+	}
+
+	// Check if SSH key has been installed
+	if !contains(enrollment.StepsCompleted, "key_installing") {
+		return nil, fmt.Errorf("cannot resume: SSH key not installed yet, use Retry with password instead")
+	}
+
+	// Reset state to resume from the failed step
+	enrollment.State = StatePending
+	enrollment.RetryCount++
+	enrollment.LastError = ""
+	enrollment.UpdatedAt = time.Now()
+
+	if err := s.store.UpdateEnrollment(ctx, enrollment); err != nil {
+		return nil, err
+	}
+
+	// Create cancellable context
+	enrollCtx, cancel := context.WithCancel(ctx)
+
+	// Track active enrollment
+	s.mu.Lock()
+	s.enrollments[enrollment.ID] = cancel
+	s.mu.Unlock()
+
+	// Resume enrollment with key-based auth (empty password signals key auth)
+	go s.runEnrollmentWithKey(enrollCtx, enrollment, events)
+
+	return enrollment, nil
+}
+
+// CanResume checks if an enrollment can be resumed without password.
+func (s *Service) CanResume(enrollment *Enrollment) bool {
+	return enrollment.State == StateFailed && contains(enrollment.StepsCompleted, "key_installing")
+}
+
+// runEnrollmentWithKey executes enrollment using SSH key authentication.
+func (s *Service) runEnrollmentWithKey(ctx context.Context, enrollment *Enrollment, events chan<- Event) {
+	defer func() {
+		safeClose(events)
+		s.mu.Lock()
+		delete(s.enrollments, enrollment.ID)
+		s.mu.Unlock()
+	}()
+
+	now := time.Now()
+	enrollment.StartedAt = &now
+
+	// First, establish SSH connection using key
+	sendEvent(events, Event{
+		Type:         "step",
+		Step:         "reconnecting",
+		Message:      "Reconnecting via SSH key",
+		EnrollmentID: enrollment.ID,
+		Timestamp:    time.Now(),
+	})
+
+	// Get the provisioning key
+	keyPair, err := s.keyStore.GetOrCreateProvisioningKey(ctx)
+	if err != nil {
+		s.handleError(ctx, enrollment, events, fmt.Errorf("getting provisioning key: %w", err))
+		return
+	}
+
+	privateKey, err := s.keyStore.GetPrivateKey(ctx, keyPair.Name)
+	if err != nil {
+		s.handleError(ctx, enrollment, events, fmt.Errorf("getting private key: %w", err))
+		return
+	}
+
+	// Connect using key
+	client, err := ConnectSSH(ctx, SSHConfig{
+		Host:       enrollment.TargetIP,
+		Port:       enrollment.TargetPort,
+		Username:   enrollment.Username,
+		PrivateKey: privateKey,
+		Timeout:    30 * time.Second,
+	})
+	if err != nil {
+		s.handleError(ctx, enrollment, events, fmt.Errorf("SSH key connection failed: %w", err))
+		return
+	}
+
+	// Store session
+	session := &sshSession{client: client}
+	activeSessions[enrollment.ID] = session
+
+	// Re-detect system info for the session
+	info, err := DetectSystem(ctx, client)
+	if err != nil {
+		s.handleError(ctx, enrollment, events, fmt.Errorf("system detection failed: %w", err))
+		return
+	}
+	session.systemInfo = info
+
+	sendEvent(events, Event{
+		Type:      "log",
+		Step:      "reconnecting",
+		Message:   fmt.Sprintf("Reconnected to %s via SSH key", enrollment.TargetIP),
+		Timestamp: time.Now(),
+	})
+
+	// Now run remaining steps (skipping already completed ones)
+	s.runRemainingSteps(ctx, enrollment, "", events)
+}
+
+// runRemainingSteps executes the remaining enrollment steps.
+func (s *Service) runRemainingSteps(ctx context.Context, enrollment *Enrollment, password string, events chan<- Event) {
+	// State machine steps
+	steps := []struct {
+		state State
+		name  string
+		fn    func(ctx context.Context, enrollment *Enrollment, password string, events chan<- Event) error
+	}{
+		{StateConnecting, "connecting", s.stepConnect},
+		{StateDetecting, "detecting", s.stepDetect},
+		{StateKeyInstalling, "key_installing", s.stepInstallKey},
+		{StateHardening, "hardening", s.stepHarden},
+		{StateTailscale, "tailscale", s.stepInstallTailscale},
+		{StateDependencies, "dependencies", s.stepInstallDependencies},
+		{StateAgentInstalling, "agent_installing", s.stepInstallAgent},
+		{StateStarting, "starting", s.stepStartAgent},
+		{StateRegistering, "registering", s.stepVerifyRegistration},
+	}
+
+	// Calculate progress per step
+	progressPerStep := 100 / len(steps)
+
+	// Find where to resume from (skip completed steps)
+	startIdx := 0
+	for i, step := range steps {
+		if contains(enrollment.StepsCompleted, step.name) {
+			startIdx = i + 1
+		}
+	}
+
+	// Execute remaining steps
+	for i := startIdx; i < len(steps); i++ {
+		step := steps[i]
+
+		// Check for cancellation
+		select {
+		case <-ctx.Done():
+			s.handleError(ctx, enrollment, events, fmt.Errorf("enrollment cancelled"))
+			return
+		default:
+		}
+
+		// Update state
+		enrollment.State = step.state
+		enrollment.CurrentStep = step.name
+		enrollment.UpdatedAt = time.Now()
+		s.store.UpdateEnrollment(ctx, enrollment)
+
+		// Send progress event
+		progress := (i + 1) * progressPerStep
+		sendEvent(events, Event{
+			Type:         "step",
+			Step:         step.name,
+			State:        step.state,
+			Message:      fmt.Sprintf("Starting: %s", step.name),
+			Progress:     progress,
+			EnrollmentID: enrollment.ID,
+			Timestamp:    time.Now(),
+		})
+
+		s.logger.Info("enrollment step starting",
+			"enrollment_id", enrollment.ID,
+			"step", step.name,
+			"target", enrollment.TargetIP)
+
+		// Execute step
+		if err := step.fn(ctx, enrollment, password, events); err != nil {
+			s.handleError(ctx, enrollment, events, err)
+			return
+		}
+
+		// Mark step complete
+		enrollment.StepsCompleted = append(enrollment.StepsCompleted, step.name)
+		enrollment.UpdatedAt = time.Now()
+		s.store.UpdateEnrollment(ctx, enrollment)
+
+		sendEvent(events, Event{
+			Type:      "log",
+			Step:      step.name,
+			Message:   fmt.Sprintf("Completed: %s", step.name),
+			Progress:  progress,
+			Timestamp: time.Now(),
+		})
+	}
+
+	// Enrollment complete
+	enrollment.State = StateComplete
+	now := time.Now()
+	enrollment.CompletedAt = &now
+	enrollment.UpdatedAt = now
+	s.store.UpdateEnrollment(ctx, enrollment)
+
+	sendEvent(events, Event{
+		Type:      "complete",
+		State:     StateComplete,
+		Message:   "Enrollment completed successfully",
+		Progress:  100,
+		Details:   map[string]string{"agent_id": enrollment.AgentID},
+		Timestamp: time.Now(),
+	})
+
+	s.logger.Info("enrollment completed",
+		"enrollment_id", enrollment.ID,
+		"agent_id", enrollment.AgentID,
+		"target", enrollment.TargetIP)
 }
 
 // GetEnrollment returns an enrollment by ID.
@@ -373,6 +654,8 @@ func (s *Service) runEnrollment(ctx context.Context, enrollment *Enrollment, pas
 		{StateDetecting, "detecting", s.stepDetect},
 		{StateKeyInstalling, "key_installing", s.stepInstallKey},
 		{StateHardening, "hardening", s.stepHarden},
+		{StateTailscale, "tailscale", s.stepInstallTailscale},
+		{StateDependencies, "dependencies", s.stepInstallDependencies},
 		{StateAgentInstalling, "agent_installing", s.stepInstallAgent},
 		{StateStarting, "starting", s.stepStartAgent},
 		{StateRegistering, "registering", s.stepVerifyRegistration},
@@ -410,12 +693,13 @@ func (s *Service) runEnrollment(ctx context.Context, enrollment *Enrollment, pas
 		// Send progress event
 		progress := (i + 1) * progressPerStep
 		sendEvent(events, Event{
-			Type:      "step",
-			Step:      step.name,
-			State:     step.state,
-			Message:   fmt.Sprintf("Starting: %s", step.name),
-			Progress:  progress,
-			Timestamp: time.Now(),
+			Type:         "step",
+			Step:         step.name,
+			State:        step.state,
+			Message:      fmt.Sprintf("Starting: %s", step.name),
+			Progress:     progress,
+			EnrollmentID: enrollment.ID,
+			Timestamp:    time.Now(),
 		})
 
 		s.logger.Info("enrollment step starting",

@@ -13,6 +13,10 @@ import {
   Cpu,
   HardDrive,
   Activity,
+  Shuffle,
+  CheckCircle,
+  XCircle,
+  Loader2,
 } from 'lucide-react';
 
 import { PageHeader, PageContent } from '../components/Layout';
@@ -39,6 +43,7 @@ const statuses = [
   { value: 'active', label: 'Active' },
   { value: 'degraded', label: 'Degraded' },
   { value: 'offline', label: 'Offline' },
+  { value: 'archived', label: 'Archived' },
 ];
 
 export function Agents() {
@@ -52,6 +57,8 @@ export function Agents() {
   const [providerFilter, setProviderFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [showEnrollModal, setShowEnrollModal] = useState(false);
+  const [rebalanceStatus, setRebalanceStatus] = useState(null);
+  const [isRebalancing, setIsRebalancing] = useState(false);
 
   const fetchAgents = async () => {
     try {
@@ -71,11 +78,46 @@ export function Agents() {
     }
   };
 
+  const fetchRebalanceStatus = async () => {
+    try {
+      const status = await endpoints.getAssignmentStatus();
+      setRebalanceStatus(status);
+      setIsRebalancing(status.is_running);
+    } catch (err) {
+      console.error('Failed to fetch rebalance status:', err);
+    }
+  };
+
+  const handleRebalance = async () => {
+    if (isRebalancing) return;
+
+    try {
+      setIsRebalancing(true);
+      await endpoints.triggerRebalance();
+      // Poll for completion
+      const pollStatus = setInterval(async () => {
+        const status = await endpoints.getAssignmentStatus();
+        setRebalanceStatus(status);
+        if (!status.is_running) {
+          setIsRebalancing(false);
+          clearInterval(pollStatus);
+          fetchAgents(); // Refresh agents after rebalance
+        }
+      }, 2000);
+    } catch (err) {
+      console.error('Failed to trigger rebalance:', err);
+      setIsRebalancing(false);
+    }
+  };
+
   useEffect(() => {
     fetchAgents();
+    fetchRebalanceStatus();
+    // Pause auto-refresh when modal is open
+    if (showEnrollModal) return;
     const interval = setInterval(fetchAgents, 10000);
     return () => clearInterval(interval);
-  }, []);
+  }, [showEnrollModal]);
 
   // Build dynamic filter options from data
   const regionOptions = useMemo(() => {
@@ -94,8 +136,21 @@ export function Agents() {
     ];
   }, [agents]);
 
+  // Determine if an agent is archived
+  const isArchived = (agent) => !!agent.archived_at;
+
+  // Get the effective status of an agent (archived takes precedence)
+  const getEffectiveStatus = (agent) => isArchived(agent) ? 'archived' : agent.status;
+
   const filteredAgents = useMemo(() => {
     return agents.filter((agent) => {
+      const effectiveStatus = getEffectiveStatus(agent);
+
+      // By default (no status filter), hide archived agents
+      if (!statusFilter && effectiveStatus === 'archived') {
+        return false;
+      }
+
       if (search && !agent.name.toLowerCase().includes(search.toLowerCase())) {
         return false;
       }
@@ -105,7 +160,7 @@ export function Agents() {
       if (providerFilter && agent.provider !== providerFilter) {
         return false;
       }
-      if (statusFilter && agent.status !== statusFilter) {
+      if (statusFilter && effectiveStatus !== statusFilter) {
         return false;
       }
       return true;
@@ -113,12 +168,15 @@ export function Agents() {
   }, [agents, search, regionFilter, providerFilter, statusFilter]);
 
   const stats = useMemo(() => {
-    const total = agents.length;
-    const active = agents.filter((a) => a.status === 'active').length;
-    const degraded = agents.filter((a) => a.status === 'degraded').length;
-    const offline = agents.filter((a) => a.status === 'offline').length;
+    // Filter out archived agents from the main counts
+    const nonArchived = agents.filter((a) => !isArchived(a));
+    const total = nonArchived.length;
+    const active = nonArchived.filter((a) => a.status === 'active').length;
+    const degraded = nonArchived.filter((a) => a.status === 'degraded').length;
+    const offline = nonArchived.filter((a) => a.status === 'offline').length;
+    const archived = agents.filter((a) => isArchived(a)).length;
 
-    return { total, active, degraded, offline };
+    return { total, active, degraded, offline, archived };
   }, [agents]);
 
   if (error) {
@@ -266,6 +324,50 @@ export function Agents() {
                   </div>
                 </div>
               </div>
+
+              {/* Rebalance Button */}
+              <div className="mt-4 pt-4 border-t border-border-subtle flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <Shuffle className="w-4 h-4 text-theme-muted" />
+                  <div>
+                    <div className="text-sm text-theme-primary font-medium">Target Assignment</div>
+                    <div className="text-xs text-theme-muted">
+                      {rebalanceStatus?.last_completed ? (
+                        <>
+                          Last rebalanced: {new Date(rebalanceStatus.last_completed).toLocaleString()}
+                          {rebalanceStatus.last_assignments > 0 && (
+                            <> ({rebalanceStatus.last_assignments.toLocaleString()} assignments)</>
+                          )}
+                          {rebalanceStatus.last_error && (
+                            <span className="text-pilot-red ml-2">Error: {rebalanceStatus.last_error}</span>
+                          )}
+                        </>
+                      ) : (
+                        'Distribute targets across all active agents'
+                      )}
+                    </div>
+                  </div>
+                </div>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={handleRebalance}
+                  disabled={isRebalancing}
+                  className="gap-2"
+                >
+                  {isRebalancing ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      Rebalancing...
+                    </>
+                  ) : (
+                    <>
+                      <Shuffle className="w-4 h-4" />
+                      Rebalance Targets
+                    </>
+                  )}
+                </Button>
+              </div>
             </CardContent>
           </Card>
         )}
@@ -355,12 +457,17 @@ export function Agents() {
                       </div>
                     </TableCell>
                     <TableCell>
-                      <StatusBadge
-                        status={agent.status === 'active' ? 'healthy' : agent.status === 'degraded' ? 'degraded' : 'down'}
-                        label={agent.status}
-                        pulse={agent.status === 'offline'}
-                        size="sm"
-                      />
+                      {(() => {
+                        const effectiveStatus = getEffectiveStatus(agent);
+                        return (
+                          <StatusBadge
+                            status={effectiveStatus === 'active' ? 'healthy' : effectiveStatus === 'degraded' ? 'degraded' : effectiveStatus === 'archived' ? 'unknown' : 'down'}
+                            label={effectiveStatus}
+                            pulse={effectiveStatus === 'offline'}
+                            size="sm"
+                          />
+                        );
+                      })()}
                     </TableCell>
                     <TableCell className="text-theme-muted">
                       {agent.version || 'unknown'}

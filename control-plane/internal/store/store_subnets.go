@@ -27,11 +27,11 @@ func (s *Store) CreateSubnet(ctx context.Context, subnet *types.Subnet) error {
 		INSERT INTO subnets (
 			id, pilot_subnet_id, network_address, network_size,
 			gateway_address, first_usable_address, last_usable_address,
-			vlan_id, service_id, subscriber_id, subscriber_name,
+			vlan_id, service_id, service_status, subscriber_id, subscriber_name,
 			location_id, location_address, city, region, pop_name,
 			gateway_device, state
 		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18
+			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19
 		)
 	`,
 		subnet.ID,
@@ -43,6 +43,7 @@ func (s *Store) CreateSubnet(ctx context.Context, subnet *types.Subnet) error {
 		subnet.LastUsableAddress,
 		subnet.VLANID,
 		subnet.ServiceID,
+		subnet.ServiceStatus,
 		subnet.SubscriberID,
 		subnet.SubscriberName,
 		subnet.LocationID,
@@ -85,7 +86,7 @@ func (s *Store) GetSubnet(ctx context.Context, id string) (*types.Subnet, error)
 		SELECT
 			id, pilot_subnet_id, network_address::text, network_size,
 			host(gateway_address), host(first_usable_address), host(last_usable_address),
-			vlan_id, service_id, subscriber_id, subscriber_name,
+			vlan_id, service_id, service_status, subscriber_id, subscriber_name,
 			location_id, location_address, city, region, pop_name,
 			gateway_device, state, archived_at, archive_reason,
 			created_at, updated_at
@@ -100,6 +101,7 @@ func (s *Store) GetSubnet(ctx context.Context, id string) (*types.Subnet, error)
 		&subnet.LastUsableAddress,
 		&subnet.VLANID,
 		&subnet.ServiceID,
+		&subnet.ServiceStatus,
 		&subnet.SubscriberID,
 		&subnet.SubscriberName,
 		&subnet.LocationID,
@@ -130,7 +132,7 @@ func (s *Store) GetSubnetByPilotID(ctx context.Context, pilotID int) (*types.Sub
 		SELECT
 			id, pilot_subnet_id, network_address::text, network_size,
 			host(gateway_address), host(first_usable_address), host(last_usable_address),
-			vlan_id, service_id, subscriber_id, subscriber_name,
+			vlan_id, service_id, service_status, subscriber_id, subscriber_name,
 			location_id, location_address, city, region, pop_name,
 			gateway_device, state, archived_at, archive_reason,
 			created_at, updated_at
@@ -145,6 +147,7 @@ func (s *Store) GetSubnetByPilotID(ctx context.Context, pilotID int) (*types.Sub
 		&subnet.LastUsableAddress,
 		&subnet.VLANID,
 		&subnet.ServiceID,
+		&subnet.ServiceStatus,
 		&subnet.SubscriberID,
 		&subnet.SubscriberName,
 		&subnet.LocationID,
@@ -193,7 +196,7 @@ func (s *Store) listSubnetsWithFilter(ctx context.Context, where string, args []
 		SELECT
 			id, pilot_subnet_id, network_address::text, network_size,
 			host(gateway_address), host(first_usable_address), host(last_usable_address),
-			vlan_id, service_id, subscriber_id, subscriber_name,
+			vlan_id, service_id, service_status, subscriber_id, subscriber_name,
 			location_id, location_address, city, region, pop_name,
 			gateway_device, state, archived_at, archive_reason,
 			created_at, updated_at
@@ -221,6 +224,7 @@ func (s *Store) listSubnetsWithFilter(ctx context.Context, where string, args []
 			&subnet.LastUsableAddress,
 			&subnet.VLANID,
 			&subnet.ServiceID,
+			&subnet.ServiceStatus,
 			&subnet.SubscriberID,
 			&subnet.SubscriberName,
 			&subnet.LocationID,
@@ -250,6 +254,7 @@ type SubnetListParams struct {
 	City            string
 	Region          string
 	SubscriberID    *int
+	ServiceStatus   string // Filter by service status (e.g., "cancelled", "active")
 	Search          string // Searches network address, subscriber name, location
 	IncludeArchived bool
 }
@@ -292,6 +297,11 @@ func (s *Store) ListSubnetsPaginated(ctx context.Context, params SubnetListParam
 		args = append(args, *params.SubscriberID)
 		argNum++
 	}
+	if params.ServiceStatus != "" {
+		conditions = append(conditions, fmt.Sprintf("service_status = $%d", argNum))
+		args = append(args, params.ServiceStatus)
+		argNum++
+	}
 	if params.Search != "" {
 		conditions = append(conditions, fmt.Sprintf(
 			"(network_address::text ILIKE $%d OR subscriber_name ILIKE $%d OR location_address ILIKE $%d OR city ILIKE $%d)",
@@ -326,7 +336,7 @@ func (s *Store) ListSubnetsPaginated(ctx context.Context, params SubnetListParam
 		SELECT
 			id, pilot_subnet_id, network_address::text, network_size,
 			host(gateway_address), host(first_usable_address), host(last_usable_address),
-			vlan_id, service_id, subscriber_id, subscriber_name,
+			vlan_id, service_id, service_status, subscriber_id, subscriber_name,
 			location_id, location_address, city, region, pop_name,
 			gateway_device, state, archived_at, archive_reason,
 			created_at, updated_at
@@ -357,6 +367,7 @@ func (s *Store) ListSubnetsPaginated(ctx context.Context, params SubnetListParam
 			&subnet.LastUsableAddress,
 			&subnet.VLANID,
 			&subnet.ServiceID,
+			&subnet.ServiceStatus,
 			&subnet.SubscriberID,
 			&subnet.SubscriberName,
 			&subnet.LocationID,
@@ -400,14 +411,15 @@ func (s *Store) UpdateSubnet(ctx context.Context, subnet *types.Subnet) error {
 			last_usable_address = $7,
 			vlan_id = $8,
 			service_id = $9,
-			subscriber_id = $10,
-			subscriber_name = $11,
-			location_id = $12,
-			location_address = $13,
-			city = $14,
-			region = $15,
-			pop_name = $16,
-			gateway_device = $17,
+			service_status = $10,
+			subscriber_id = $11,
+			subscriber_name = $12,
+			location_id = $13,
+			location_address = $14,
+			city = $15,
+			region = $16,
+			pop_name = $17,
+			gateway_device = $18,
 			updated_at = NOW()
 		WHERE id = $1
 	`,
@@ -420,6 +432,7 @@ func (s *Store) UpdateSubnet(ctx context.Context, subnet *types.Subnet) error {
 		subnet.LastUsableAddress,
 		subnet.VLANID,
 		subnet.ServiceID,
+		subnet.ServiceStatus,
 		subnet.SubscriberID,
 		subnet.SubscriberName,
 		subnet.LocationID,
@@ -564,7 +577,7 @@ func (s *Store) ListTargetsBySubnet(ctx context.Context, subnetID string) ([]typ
 			subnet_id, ownership, origin, ip_type,
 			monitoring_state, state_changed_at, needs_review, discovery_attempts, last_response_at,
 			first_response_at, baseline_established_at,
-			archived_at, archive_reason, expected_outcome, created_at, updated_at
+			archived_at, archive_reason, expected_outcome, created_at, updated_at, is_representative
 		FROM targets
 		WHERE subnet_id = $1 AND archived_at IS NULL
 		ORDER BY ip_address
@@ -585,7 +598,7 @@ func (s *Store) ListTargetsNeedingReview(ctx context.Context) ([]types.TargetEnr
 			t.subnet_id, t.ownership, t.origin, t.ip_type,
 			t.monitoring_state, t.state_changed_at, t.needs_review, t.discovery_attempts, t.last_response_at,
 			t.first_response_at, t.baseline_established_at,
-			t.archived_at, t.archive_reason, t.expected_outcome, t.created_at, t.updated_at,
+			t.archived_at, t.archive_reason, t.expected_outcome, t.created_at, t.updated_at, t.is_representative,
 			s.network_address::text, s.network_size, s.pilot_subnet_id,
 			s.service_id, s.subscriber_id, s.subscriber_name,
 			s.location_id, s.location_address, s.city, s.region, s.pop_name,
@@ -619,6 +632,7 @@ func (s *Store) scanTargets(rows pgx.Rows) ([]types.Target, error) {
 			&monitoringState, &target.StateChangedAt, &target.NeedsReview, &target.DiscoveryAttempts, &target.LastResponseAt,
 			&target.FirstResponseAt, &target.BaselineEstablishedAt,
 			&target.ArchivedAt, &archiveReason, &expectedJSON, &target.CreatedAt, &target.UpdatedAt,
+			&target.IsRepresentative,
 		); err != nil {
 			return nil, err
 		}
@@ -671,6 +685,7 @@ func (s *Store) scanEnrichedTargets(rows pgx.Rows) ([]types.TargetEnriched, erro
 			&monitoringState, &target.StateChangedAt, &target.NeedsReview, &target.DiscoveryAttempts, &target.LastResponseAt,
 			&target.FirstResponseAt, &target.BaselineEstablishedAt,
 			&target.ArchivedAt, &archiveReason, &expectedJSON, &target.CreatedAt, &target.UpdatedAt,
+			&target.IsRepresentative,
 			// Subnet fields
 			&target.NetworkAddress, &target.NetworkSize, &target.PilotSubnetID,
 			&target.ServiceID, &target.SubnetSubscriberID, &target.SubscriberName,
@@ -845,7 +860,7 @@ func (s *Store) GetTargetsForBaselineCheck(ctx context.Context, threshold time.D
 			subnet_id, ownership, origin, ip_type,
 			monitoring_state, state_changed_at, needs_review, discovery_attempts, last_response_at,
 			first_response_at, baseline_established_at,
-			archived_at, archive_reason, expected_outcome, created_at, updated_at
+			archived_at, archive_reason, expected_outcome, created_at, updated_at, is_representative
 		FROM targets
 		WHERE monitoring_state = 'active'
 		  AND archived_at IS NULL
@@ -917,7 +932,7 @@ func (s *Store) GetTargetsForDownTransition(ctx context.Context, threshold time.
 			subnet_id, ownership, origin, ip_type,
 			monitoring_state, state_changed_at, needs_review, discovery_attempts, last_response_at,
 			first_response_at, baseline_established_at,
-			archived_at, archive_reason, expected_outcome, created_at, updated_at
+			archived_at, archive_reason, expected_outcome, created_at, updated_at, is_representative
 		FROM targets
 		WHERE monitoring_state = 'active'
 		  AND archived_at IS NULL
@@ -942,7 +957,7 @@ func (s *Store) GetTargetsForUnresponsiveTransition(ctx context.Context, thresho
 			subnet_id, ownership, origin, ip_type,
 			monitoring_state, state_changed_at, needs_review, discovery_attempts, last_response_at,
 			first_response_at, baseline_established_at,
-			archived_at, archive_reason, expected_outcome, created_at, updated_at
+			archived_at, archive_reason, expected_outcome, created_at, updated_at, is_representative
 		FROM targets
 		WHERE monitoring_state = 'active'
 		  AND archived_at IS NULL
@@ -968,7 +983,7 @@ func (s *Store) GetTargetsForExcludedTransition(ctx context.Context, threshold t
 			subnet_id, ownership, origin, ip_type,
 			monitoring_state, state_changed_at, needs_review, discovery_attempts, last_response_at,
 			first_response_at, baseline_established_at,
-			archived_at, archive_reason, expected_outcome, created_at, updated_at
+			archived_at, archive_reason, expected_outcome, created_at, updated_at, is_representative
 		FROM targets
 		WHERE monitoring_state = 'down'
 		  AND archived_at IS NULL
@@ -1148,4 +1163,276 @@ func (s *Store) ArchiveTarget(ctx context.Context, targetID string, reason strin
 	}
 
 	return tx.Commit(ctx)
+}
+
+// =============================================================================
+// SERVICE STATUS MANAGEMENT
+// =============================================================================
+
+// UpdateSubnetServiceStatus updates only the service_status field for a subnet.
+// Returns true if the status changed, false otherwise.
+func (s *Store) UpdateSubnetServiceStatus(ctx context.Context, subnetID string, newStatus *string) (bool, error) {
+	result, err := s.pool.Exec(ctx, `
+		UPDATE subnets SET
+			service_status = $2,
+			service_status_changed_at = CASE
+				WHEN service_status IS DISTINCT FROM $2 THEN NOW()
+				ELSE service_status_changed_at
+			END,
+			updated_at = NOW()
+		WHERE id = $1
+		  AND (service_status IS DISTINCT FROM $2)
+	`, subnetID, newStatus)
+	if err != nil {
+		return false, err
+	}
+	return result.RowsAffected() > 0, nil
+}
+
+// ListCancelledServiceSubnets returns all subnets with cancelled service status.
+func (s *Store) ListCancelledServiceSubnets(ctx context.Context) ([]types.Subnet, error) {
+	return s.listSubnetsWithFilter(ctx, "service_status = 'cancelled' AND state = 'active'", nil)
+}
+
+// GetSubnetsWithServiceStatusChange returns subnets where the service_status
+// changed recently (for logging/alerting purposes).
+func (s *Store) GetSubnetsWithServiceStatusChange(ctx context.Context, since time.Duration) ([]types.Subnet, error) {
+	return s.listSubnetsWithFilter(ctx, "service_status_changed_at > NOW() - $1::interval", []interface{}{since})
+}
+
+// TransitionTargetsByServiceCancellation moves all active targets in a subnet
+// to INACTIVE state when the service is cancelled. Returns the count of affected targets.
+func (s *Store) TransitionTargetsByServiceCancellation(ctx context.Context, subnetID string) (int, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback(ctx)
+
+	// Get all active targets in this subnet
+	rows, err := tx.Query(ctx, `
+		SELECT id, monitoring_state
+		FROM targets
+		WHERE subnet_id = $1
+		  AND archived_at IS NULL
+		  AND monitoring_state NOT IN ('inactive', 'excluded')
+	`, subnetID)
+	if err != nil {
+		return 0, err
+	}
+
+	var targetIDs []string
+	var oldStates []string
+	for rows.Next() {
+		var id, state string
+		if err := rows.Scan(&id, &state); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		targetIDs = append(targetIDs, id)
+		oldStates = append(oldStates, state)
+	}
+	rows.Close()
+
+	if len(targetIDs) == 0 {
+		return 0, nil
+	}
+
+	// Transition all targets to INACTIVE
+	result, err := tx.Exec(ctx, `
+		UPDATE targets SET
+			monitoring_state = 'inactive',
+			state_changed_at = NOW(),
+			updated_at = NOW()
+		WHERE subnet_id = $1
+		  AND archived_at IS NULL
+		  AND monitoring_state NOT IN ('inactive', 'excluded')
+	`, subnetID)
+	if err != nil {
+		return 0, err
+	}
+
+	// Record state transitions in history
+	for i, targetID := range targetIDs {
+		_, err = tx.Exec(ctx, `
+			INSERT INTO target_state_history (target_id, from_state, to_state, reason, triggered_by)
+			VALUES ($1, $2, 'inactive', 'service_cancelled', 'sync')
+		`, targetID, oldStates[i])
+		if err != nil {
+			return 0, err
+		}
+	}
+
+	// Log activity
+	detailsJSON, _ := json.Marshal(map[string]interface{}{
+		"targets_affected": len(targetIDs),
+		"reason":           "service_cancelled",
+	})
+	_, _ = tx.Exec(ctx, `
+		INSERT INTO activity_log (
+			subnet_id, category, event_type, details, triggered_by, severity
+		) VALUES ($1, 'subnet', 'service_cancelled', $2, 'sync', 'warning')
+	`, subnetID, detailsJSON)
+
+	if err := tx.Commit(ctx); err != nil {
+		return 0, err
+	}
+
+	return int(result.RowsAffected()), nil
+}
+
+// =============================================================================
+// REPRESENTATIVE MONITORING
+// =============================================================================
+
+// GetSubnetRepresentative returns the current representative target for a subnet.
+// Returns nil if no representative exists (subnet has no baseline-established customer IPs).
+func (s *Store) GetSubnetRepresentative(ctx context.Context, subnetID string) (*types.Target, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT
+			id, host(ip_address), tier, subscriber_id, tags, display_name, notes,
+			subnet_id, ownership, origin, ip_type,
+			monitoring_state, state_changed_at, needs_review, discovery_attempts, last_response_at,
+			first_response_at, baseline_established_at,
+			archived_at, archive_reason, expected_outcome, created_at, updated_at, is_representative
+		FROM targets
+		WHERE subnet_id = $1
+		  AND is_representative = true
+		  AND ip_type = 'customer'
+		  AND archived_at IS NULL
+		LIMIT 1
+	`, subnetID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	targets, err := s.scanTargets(rows)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(targets) == 0 {
+		return nil, nil
+	}
+	return &targets[0], nil
+}
+
+// ElectRepresentative sets a target as the representative for its subnet.
+// Also transitions the target to ACTIVE state if not already.
+func (s *Store) ElectRepresentative(ctx context.Context, subnetID, targetID string) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	// Clear any existing representative for this subnet
+	_, err = tx.Exec(ctx, `
+		UPDATE targets
+		SET is_representative = false, updated_at = NOW()
+		WHERE subnet_id = $1 AND is_representative = true
+	`, subnetID)
+	if err != nil {
+		return err
+	}
+
+	// Set the new representative
+	_, err = tx.Exec(ctx, `
+		UPDATE targets
+		SET is_representative = true,
+		    monitoring_state = 'active',
+		    state_changed_at = NOW(),
+		    updated_at = NOW()
+		WHERE id = $1
+	`, targetID)
+	if err != nil {
+		return err
+	}
+
+	return tx.Commit(ctx)
+}
+
+// GetStandbyTargetsForSubnet returns all standby targets for a subnet, ordered by baseline age.
+// These are potential failover candidates.
+func (s *Store) GetStandbyTargetsForSubnet(ctx context.Context, subnetID string) ([]types.Target, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT
+			id, host(ip_address), tier, subscriber_id, tags, display_name, notes,
+			subnet_id, ownership, origin, ip_type,
+			monitoring_state, state_changed_at, needs_review, discovery_attempts, last_response_at,
+			first_response_at, baseline_established_at,
+			archived_at, archive_reason, expected_outcome, created_at, updated_at, is_representative
+		FROM targets
+		WHERE subnet_id = $1
+		  AND monitoring_state = 'standby'
+		  AND archived_at IS NULL
+		ORDER BY baseline_established_at ASC, ip_address ASC
+	`, subnetID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	return s.scanTargets(rows)
+}
+
+// PromoteStandbyToRepresentative promotes the oldest standby target to representative.
+// Returns the promoted target, or nil if no standby targets exist.
+func (s *Store) PromoteStandbyToRepresentative(ctx context.Context, subnetID string) (*types.Target, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	// Find the oldest standby target
+	var targetID string
+	err = tx.QueryRow(ctx, `
+		SELECT id FROM targets
+		WHERE subnet_id = $1
+		  AND monitoring_state = 'standby'
+		  AND archived_at IS NULL
+		ORDER BY baseline_established_at ASC, ip_address ASC
+		LIMIT 1
+	`, subnetID).Scan(&targetID)
+	if err != nil {
+		if err.Error() == "no rows in result set" {
+			return nil, nil // No standby targets available
+		}
+		return nil, err
+	}
+
+	// Promote to representative
+	_, err = tx.Exec(ctx, `
+		UPDATE targets
+		SET is_representative = true,
+		    monitoring_state = 'active',
+		    state_changed_at = NOW(),
+		    updated_at = NOW()
+		WHERE id = $1
+	`, targetID)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+
+	// Fetch and return the promoted target
+	return s.GetTarget(ctx, targetID)
+}
+
+// TransitionTargetToStandby moves a target to STANDBY state.
+// Used when a second customer IP establishes baseline in a subnet that already has a representative.
+func (s *Store) TransitionTargetToStandby(ctx context.Context, targetID, reason string) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE targets
+		SET monitoring_state = 'standby',
+		    state_changed_at = NOW(),
+		    updated_at = NOW()
+		WHERE id = $1
+	`, targetID)
+	return err
 }

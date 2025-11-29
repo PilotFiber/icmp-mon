@@ -276,6 +276,10 @@ func (s *Store) ListAlerts(ctx context.Context, filter types.AlertFilter) ([]typ
 			t.ip_address::text as target_name,
 			ag.name as agent_name,
 			a.subnet_id,
+			CASE WHEN s.network_address IS NOT NULL
+				THEN s.network_address::text || '/' || s.network_size::text
+				ELSE NULL
+			END as subnet_cidr,
 			a.subscriber_name,
 			a.service_id,
 			a.location_id,
@@ -287,6 +291,7 @@ func (s *Store) ListAlerts(ctx context.Context, filter types.AlertFilter) ([]typ
 		FROM alerts a
 		LEFT JOIN targets t ON a.target_id = t.id
 		LEFT JOIN agents ag ON a.agent_id = ag.id
+		LEFT JOIN subnets s ON a.subnet_id = s.id
 		WHERE %s
 		ORDER BY a.detected_at DESC
 		LIMIT $%d OFFSET $%d
@@ -307,7 +312,7 @@ func (s *Store) ListAlerts(ctx context.Context, filter types.AlertFilter) ([]typ
 		var targetName, agentName *string
 		var message *string
 		// Subnet metadata fields (stored on alert, nullable)
-		var subnetID, subscriberName, locationAddress, city, region, popName, gatewayDevice *string
+		var subnetID, subnetCIDR, subscriberName, locationAddress, city, region, popName, gatewayDevice *string
 		var serviceID, locationID *int
 
 		if err := rows.Scan(
@@ -324,7 +329,7 @@ func (s *Store) ListAlerts(ctx context.Context, filter types.AlertFilter) ([]typ
 			&incidentID, &correlationKey,
 			&alert.CreatedAt,
 			&targetName, &agentName,
-			&subnetID, &subscriberName, &serviceID, &locationID, &locationAddress, &city, &region, &popName, &gatewayDevice,
+			&subnetID, &subnetCIDR, &subscriberName, &serviceID, &locationID, &locationAddress, &city, &region, &popName, &gatewayDevice,
 		); err != nil {
 			return nil, err
 		}
@@ -359,6 +364,9 @@ func (s *Store) ListAlerts(ctx context.Context, filter types.AlertFilter) ([]typ
 		// Subnet metadata
 		if subnetID != nil {
 			alert.SubnetID = *subnetID
+		}
+		if subnetCIDR != nil {
+			alert.SubnetCIDR = *subnetCIDR
 		}
 		if subscriberName != nil {
 			alert.SubscriberName = *subscriberName
@@ -1327,4 +1335,81 @@ func generateUUID() string {
 	b[6] = (b[6] & 0x0f) | 0x40
 	b[8] = (b[8] & 0x3f) | 0x80
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:])
+}
+
+// =============================================================================
+// SERVICE CANCELLATION - BULK ALERT RESOLUTION
+// =============================================================================
+
+// ResolveAlertsBySubnet resolves all active alerts for targets in a given subnet.
+// Used when a service is cancelled to suppress all alerts for that subnet.
+// Returns the number of alerts resolved.
+func (s *Store) ResolveAlertsBySubnet(ctx context.Context, subnetID string, reason string) (int, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback(ctx)
+
+	// Find all active/acknowledged alerts for targets in this subnet
+	rows, err := tx.Query(ctx, `
+		SELECT a.id, a.status
+		FROM alerts a
+		JOIN targets t ON a.target_id = t.id
+		WHERE t.subnet_id = $1
+		  AND a.status IN ('active', 'acknowledged')
+	`, subnetID)
+	if err != nil {
+		return 0, err
+	}
+
+	var alertIDs []string
+	var oldStatuses []types.AlertStatus
+	for rows.Next() {
+		var id string
+		var status types.AlertStatus
+		if err := rows.Scan(&id, &status); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		alertIDs = append(alertIDs, id)
+		oldStatuses = append(oldStatuses, status)
+	}
+	rows.Close()
+
+	if len(alertIDs) == 0 {
+		return 0, nil
+	}
+
+	// Resolve all alerts
+	_, err = tx.Exec(ctx, `
+		UPDATE alerts SET
+			status = 'resolved',
+			resolved_at = NOW(),
+			last_updated_at = NOW()
+		WHERE id = ANY($1)
+	`, alertIDs)
+	if err != nil {
+		return 0, err
+	}
+
+	// Record resolution events for each alert
+	for i, alertID := range alertIDs {
+		_, err = tx.Exec(ctx, `
+			INSERT INTO alert_events (
+				alert_id, event_type,
+				old_status, new_status,
+				description, triggered_by
+			) VALUES ($1, 'resolved', $2, 'resolved', $3, 'sync')
+		`, alertID, oldStatuses[i], reason)
+		if err != nil {
+			return 0, err
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return 0, err
+	}
+
+	return len(alertIDs), nil
 }

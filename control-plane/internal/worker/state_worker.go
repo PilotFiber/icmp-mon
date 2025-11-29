@@ -41,6 +41,18 @@ type StateStore interface {
 
 	// SetTargetBaseline marks a target as having an established baseline.
 	SetTargetBaseline(ctx context.Context, targetID string) error
+
+	// GetSubnetRepresentative returns the current representative target for a subnet.
+	GetSubnetRepresentative(ctx context.Context, subnetID string) (*types.Target, error)
+
+	// ElectRepresentative sets a target as the representative for its subnet.
+	ElectRepresentative(ctx context.Context, subnetID, targetID string) error
+
+	// TransitionTargetToStandby moves a target to STANDBY state.
+	TransitionTargetToStandby(ctx context.Context, targetID, reason string) error
+
+	// PromoteStandbyToRepresentative promotes the oldest standby target to representative.
+	PromoteStandbyToRepresentative(ctx context.Context, subnetID string) (*types.Target, error)
 }
 
 // StateWorkerConfig holds configuration for the state worker.
@@ -171,6 +183,7 @@ func (w *StateWorker) runOnce(ctx context.Context) {
 
 // establishBaselines finds ACTIVE targets that have been responding long enough
 // and marks them as having an established baseline (alertable on future outages).
+// For customer IPs, also handles representative election.
 func (w *StateWorker) establishBaselines(ctx context.Context) int {
 	targets, err := w.store.GetTargetsForBaselineCheck(ctx, w.config.BaselineThreshold)
 	if err != nil {
@@ -194,12 +207,70 @@ func (w *StateWorker) establishBaselines(ctx context.Context) int {
 			"responding_since", t.FirstResponseAt,
 		)
 		count++
+
+		// Handle representative election for customer IPs
+		if t.IPType == types.IPTypeCustomer && t.SubnetID != nil {
+			w.electRepresentativeIfNeeded(ctx, &t)
+		}
 	}
 	return count
 }
 
+// electRepresentativeIfNeeded checks if a subnet needs a representative and either
+// elects this target or moves it to standby.
+func (w *StateWorker) electRepresentativeIfNeeded(ctx context.Context, target *types.Target) {
+	if target.SubnetID == nil {
+		return
+	}
+
+	// Check if subnet already has a representative
+	existing, err := w.store.GetSubnetRepresentative(ctx, *target.SubnetID)
+	if err != nil {
+		w.logger.Error("failed to check for existing representative",
+			"target_id", target.ID,
+			"subnet_id", *target.SubnetID,
+			"error", err,
+		)
+		return
+	}
+
+	if existing == nil {
+		// No representative yet - this target becomes the representative
+		if err := w.store.ElectRepresentative(ctx, *target.SubnetID, target.ID); err != nil {
+			w.logger.Error("failed to elect representative",
+				"target_id", target.ID,
+				"subnet_id", *target.SubnetID,
+				"error", err,
+			)
+			return
+		}
+		w.logger.Info("target elected as representative",
+			"target_id", target.ID,
+			"ip", target.IP,
+			"subnet_id", *target.SubnetID,
+		)
+	} else {
+		// Representative already exists - move this target to standby
+		if err := w.store.TransitionTargetToStandby(ctx, target.ID, "representative_exists"); err != nil {
+			w.logger.Error("failed to transition target to standby",
+				"target_id", target.ID,
+				"subnet_id", *target.SubnetID,
+				"error", err,
+			)
+			return
+		}
+		w.logger.Info("target moved to standby (representative exists)",
+			"target_id", target.ID,
+			"ip", target.IP,
+			"subnet_id", *target.SubnetID,
+			"representative_id", existing.ID,
+		)
+	}
+}
+
 // transitionToDown finds ACTIVE targets WITH baseline that haven't responded
 // recently and transitions them to DOWN (alertable outage).
+// For representative targets, also triggers failover to standby.
 func (w *StateWorker) transitionToDown(ctx context.Context) int {
 	targets, err := w.store.GetTargetsForDownTransition(ctx, w.config.DownThreshold)
 	if err != nil {
@@ -223,8 +294,44 @@ func (w *StateWorker) transitionToDown(ctx context.Context) int {
 			"ip", t.IP,
 		)
 		count++
+
+		// If this was a representative, trigger failover to standby
+		if t.IsRepresentative && t.SubnetID != nil {
+			w.handleRepresentativeFailure(ctx, &t)
+		}
 	}
 	return count
+}
+
+// handleRepresentativeFailure promotes a standby target when the representative goes down.
+func (w *StateWorker) handleRepresentativeFailure(ctx context.Context, target *types.Target) {
+	if target.SubnetID == nil {
+		return
+	}
+
+	promoted, err := w.store.PromoteStandbyToRepresentative(ctx, *target.SubnetID)
+	if err != nil {
+		w.logger.Error("failed to promote standby to representative",
+			"subnet_id", *target.SubnetID,
+			"failed_representative", target.ID,
+			"error", err,
+		)
+		return
+	}
+
+	if promoted != nil {
+		w.logger.Info("standby promoted to representative (failover)",
+			"subnet_id", *target.SubnetID,
+			"new_representative", promoted.ID,
+			"new_representative_ip", promoted.IP,
+			"failed_representative", target.ID,
+		)
+	} else {
+		w.logger.Warn("no standby targets available for failover",
+			"subnet_id", *target.SubnetID,
+			"failed_representative", target.ID,
+		)
+	}
 }
 
 // transitionToUnresponsive finds ACTIVE targets WITHOUT baseline that haven't

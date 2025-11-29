@@ -384,6 +384,21 @@ func (c *Client) buildIPPools(
 
 				// Get service details
 				if svc, ok := services[serviceID]; ok {
+					// Get service status - Flight Deck uses "active" field with integer values:
+					// -2 = cancelled, 1 = active
+					if statusInt, ok := getInt(svc, "active"); ok {
+						var statusStr string
+						switch statusInt {
+						case -2:
+							statusStr = "cancelled"
+						case 1:
+							statusStr = "active"
+						default:
+							statusStr = strconv.Itoa(statusInt)
+						}
+						pool.ServiceStatus = &statusStr
+					}
+
 					// Get subscriber
 					if subID, ok := getInt(svc, "subscriber_id"); ok {
 						pool.SubscriberID = &subID

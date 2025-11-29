@@ -205,7 +205,8 @@ func VerifyConnectivity(ctx context.Context, ssh *SSHClient, controlPlaneURL str
 	}
 
 	// Try to connect to the control plane
-	cmd := fmt.Sprintf("curl -sSf --connect-timeout 5 %s/health || wget -q --timeout=5 -O /dev/null %s/health",
+	// Use -k to skip SSL verification (connectivity test only, not security-sensitive)
+	cmd := fmt.Sprintf("curl -sSfk --connect-timeout 5 %s/health || wget -q --no-check-certificate --timeout=5 -O /dev/null %s/health",
 		controlPlaneURL, controlPlaneURL)
 	_, err = ssh.Run(ctx, cmd)
 	if err != nil {

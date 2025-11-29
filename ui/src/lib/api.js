@@ -64,6 +64,7 @@ export const api = new ApiClient();
 export const endpoints = {
   // Health
   health: () => api.get('/health'),
+  getInfrastructureHealth: () => api.get('/infrastructure/health'),
 
   // Agents
   listAgents: () => api.get('/agents'),
@@ -101,6 +102,7 @@ export const endpoints = {
   deleteTarget: (id) => api.delete(`/targets/${id}`),
   triggerMTR: (id, agentIds = []) => api.post(`/targets/${id}/mtr`, { agent_ids: agentIds }),
   getTargetLive: (id, seconds = 60) => api.get(`/targets/${id}/live?seconds=${seconds}`),
+  getTargetCommands: (id, limit = 20) => api.get(`/targets/${id}/commands?limit=${limit}`),
 
   // Tiers
   listTiers: () => api.get('/tiers'),
@@ -134,6 +136,8 @@ export const endpoints = {
 
   // Metrics
   getLatencyTrend: (window = '24h') => api.get(`/metrics/latency?window=${window}`),
+  getInMarketLatencyTrend: (window = '24h') => api.get(`/metrics/latency/in-market?window=${window}`),
+  getLatencyMatrix: (window = '24h') => api.get(`/metrics/latency/matrix?window=${window}`),
   queryMetrics: (query) => api.post('/metrics/query', query),
 
   // Stats
@@ -183,6 +187,17 @@ export const endpoints = {
     });
   },
 
+  // SSE resume - resumes failed enrollment using SSH key (no password needed)
+  resumeEnrollment: (id) => {
+    return fetch(`${API_BASE}/enrollments/${id}/resume`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'text/event-stream',
+      },
+    });
+  },
+
   // Releases
   listReleases: () => api.get('/releases'),
   getRelease: (id) => api.get(`/releases/${id}`),
@@ -203,11 +218,12 @@ export const endpoints = {
 
   // Subnets
   listSubnets: (includeArchived = true) => api.get(`/subnets?include_archived=${includeArchived}`),
-  listSubnetsPaginated: ({ limit = 50, offset = 0, pop = '', city = '', region = '', search = '', includeArchived = true } = {}) => {
+  listSubnetsPaginated: ({ limit = 50, offset = 0, pop = '', city = '', region = '', service_status = '', search = '', includeArchived = true } = {}) => {
     const params = new URLSearchParams({ limit, offset });
     if (pop) params.set('pop', pop);
     if (city) params.set('city', city);
     if (region) params.set('region', region);
+    if (service_status) params.set('service_status', service_status);
     if (search) params.set('search', search);
     if (includeArchived) params.set('include_archived', 'true');
     return api.get(`/subnets?${params.toString()}`);
@@ -239,4 +255,8 @@ export const endpoints = {
 
   // Target tags (for metrics explorer)
   getTargetTagKeys: () => api.get('/targets/tag-keys'),
+
+  // Assignments
+  getAssignmentStatus: () => api.get('/assignments/status'),
+  triggerRebalance: () => api.post('/assignments/materialize'),
 };

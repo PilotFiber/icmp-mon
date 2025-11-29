@@ -160,10 +160,24 @@ func (f *Flusher) copyResults(ctx context.Context, results []types.ProbeResult) 
 	}
 
 	// INSERT from temp to permanent table with conflict handling
+	// Computes agent_region, target_region, and is_in_market via JOINs
+	// Gateway targets are excluded from region metrics (they deprioritize ICMP, skewing latency)
 	_, err = tx.Exec(ctx, `
-		INSERT INTO probe_results (time, target_id, agent_id, success, error_message, latency_ms, packet_loss_pct, payload)
-		SELECT time, target_id, agent_id, success, error_message, latency_ms, packet_loss_pct, payload
-		FROM probe_results_staging
+		INSERT INTO probe_results (time, target_id, agent_id, success, error_message, latency_ms, packet_loss_pct, payload,
+		                           agent_region, target_region, is_in_market)
+		SELECT
+			s.time, s.target_id, s.agent_id, s.success, s.error_message, s.latency_ms, s.packet_loss_pct, s.payload,
+			CASE WHEN t.ip_type = 'gateway' THEN NULL ELSE LOWER(TRIM(a.region)) END,
+			CASE WHEN t.ip_type = 'gateway' THEN NULL ELSE LOWER(TRIM(sub.region)) END,
+			CASE WHEN t.ip_type = 'gateway' THEN NULL ELSE
+				(LOWER(TRIM(COALESCE(a.region, ''))) = LOWER(TRIM(COALESCE(sub.region, '')))
+				 AND a.region IS NOT NULL AND a.region != ''
+				 AND sub.region IS NOT NULL AND sub.region != '')
+			END
+		FROM probe_results_staging s
+		JOIN agents a ON s.agent_id = a.id
+		LEFT JOIN targets t ON s.target_id = t.id
+		LEFT JOIN subnets sub ON t.subnet_id = sub.id
 		ON CONFLICT (time, target_id, agent_id) DO NOTHING
 	`)
 	if err != nil {

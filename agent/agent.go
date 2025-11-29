@@ -13,9 +13,11 @@ package agent
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"runtime"
 	"sync"
@@ -124,12 +126,19 @@ func (a *Agent) Run(ctx context.Context) error {
 		return fmt.Errorf("registration failed: %w", err)
 	}
 
-	// Create shipper
+	// Create shipper with TLS config matching control plane client
+	shipperClient := &http.Client{Timeout: 30 * time.Second}
+	if a.cfg.ControlPlane.InsecureSkipVerify {
+		shipperClient.Transport = &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		}
+	}
 	a.shipper = shipper.NewShipper(shipper.Config{
 		Endpoint:     a.cfg.ControlPlane.URL + "/api/v1/results",
 		AgentID:      a.agentID,
 		BatchSize:    a.cfg.Probing.ResultBatchSize,
 		BatchTimeout: a.cfg.Probing.ResultBatchTimeout,
+		Client:       shipperClient,
 		Logger:       a.logger,
 	})
 

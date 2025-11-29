@@ -28,6 +28,7 @@ const stateColors = {
   active: 'healthy',
   degraded: 'degraded',    // Responding but with packet loss/latency issues (alertable)
   down: 'down',            // Was responding, now not responding (alertable)
+  standby: 'standby',      // Verified responsive, failover pool (hourly probes)
   excluded: 'inactive',    // Permanently excluded from monitoring
   unresponsive: 'inactive', // Never responded to ICMP (not alertable, gray)
   unknown: 'unknown',
@@ -38,6 +39,7 @@ const stateLabels = {
   active: 'Active',
   degraded: 'Degraded',            // Packet loss or latency issues (alertable)
   down: 'Down',                    // Alertable outage - was responding, now not
+  standby: 'Standby',              // Failover pool - verified but not actively monitored
   excluded: 'Excluded',
   unresponsive: 'Never Responded', // Not alertable - never established a baseline
   unknown: 'Unknown',
@@ -158,8 +160,8 @@ function TargetsList({ targets, loading }) {
     );
   }
 
-  // Sort targets: active first, then down, then others
-  const stateOrder = ['active', 'degraded', 'down', 'unknown', 'unresponsive', 'excluded', 'inactive'];
+  // Sort targets: active first, then standby, then down, then others
+  const stateOrder = ['active', 'standby', 'degraded', 'down', 'unknown', 'unresponsive', 'excluded', 'inactive'];
   const sortedTargets = [...targets].sort((a, b) => {
     const aState = a.monitoring_state || 'unknown';
     const bState = b.monitoring_state || 'unknown';
@@ -354,7 +356,20 @@ export function SubnetDetail() {
       />
 
       <PageContent>
-        {/* Status Banner */}
+        {/* Status Banners */}
+        {subnet.service_status === 'cancelled' && (
+          <Card accent="red" className="mb-6">
+            <div className="flex items-center gap-3">
+              <AlertTriangle className="w-5 h-5 text-pilot-red" />
+              <div>
+                <span className="font-medium text-pilot-red">Service Cancelled</span>
+                <span className="text-theme-muted ml-2">
+                  This subnet's service has been cancelled in Flight Deck. Monitoring is disabled.
+                </span>
+              </div>
+            </div>
+          </Card>
+        )}
         {subnet.archived_at && (
           <Card accent="red" className="mb-6">
             <div className="flex items-center gap-3">
@@ -383,6 +398,8 @@ export function SubnetDetail() {
                   </h2>
                   {subnet.archived_at ? (
                     <StatusBadge status="down" label="Archived" />
+                  ) : subnet.service_status === 'cancelled' ? (
+                    <StatusBadge status="down" label="Service Cancelled" />
                   ) : (
                     <StatusBadge status="healthy" label="Active" />
                   )}

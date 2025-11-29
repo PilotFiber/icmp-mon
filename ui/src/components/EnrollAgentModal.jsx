@@ -9,6 +9,7 @@ import {
   Circle,
   RefreshCw,
   Terminal,
+  Play,
 } from 'lucide-react';
 
 import { Modal, ModalFooter } from './Modal';
@@ -20,6 +21,8 @@ const ENROLLMENT_STEPS = [
   { id: 'detecting', label: 'Detecting system' },
   { id: 'key_installing', label: 'Installing SSH key' },
   { id: 'hardening', label: 'Hardening SSH' },
+  { id: 'tailscale', label: 'Installing Tailscale' },
+  { id: 'dependencies', label: 'Installing dependencies' },
   { id: 'agent_installing', label: 'Installing agent' },
   { id: 'starting', label: 'Starting agent' },
   { id: 'registering', label: 'Verifying registration' },
@@ -91,18 +94,54 @@ function LogOutput({ logs }) {
   );
 }
 
-export function EnrollAgentModal({ isOpen, onClose, onSuccess }) {
-  // Form state
+// Strip CIDR notation from IP address (e.g., "192.168.1.1/32" -> "192.168.1.1")
+function stripCIDR(ip) {
+  if (!ip) return '';
+  return ip.split('/')[0];
+}
+
+export function EnrollAgentModal({ isOpen, onClose, onSuccess, reEnrollAgent = null }) {
+  // Determine if this is a re-enrollment
+  const isReEnroll = !!reEnrollAgent;
+
+  // Form state - pre-fill from reEnrollAgent if provided
   const [formData, setFormData] = useState({
-    target_ip: '',
+    target_ip: stripCIDR(reEnrollAgent?.public_ip) || stripCIDR(reEnrollAgent?.tailscale_ip) || '',
     target_port: 22,
     username: 'root',
     password: '',
-    agent_name: '',
-    region: '',
-    location: '',
-    provider: '',
+    agent_name: reEnrollAgent?.name || '',
+    region: reEnrollAgent?.region || '',
+    location: reEnrollAgent?.location || '',
+    provider: reEnrollAgent?.provider || '',
   });
+
+  // Reset form when reEnrollAgent changes
+  useEffect(() => {
+    if (reEnrollAgent) {
+      setFormData({
+        target_ip: stripCIDR(reEnrollAgent.public_ip) || stripCIDR(reEnrollAgent.tailscale_ip) || '',
+        target_port: 22,
+        username: 'root',
+        password: '',
+        agent_name: reEnrollAgent.name || '',
+        region: reEnrollAgent.region || '',
+        location: reEnrollAgent.location || '',
+        provider: reEnrollAgent.provider || '',
+      });
+    } else {
+      setFormData({
+        target_ip: '',
+        target_port: 22,
+        username: 'root',
+        password: '',
+        agent_name: '',
+        region: '',
+        location: '',
+        provider: '',
+      });
+    }
+  }, [reEnrollAgent]);
 
   // Enrollment state
   const [phase, setPhase] = useState('form'); // form, enrolling, success, failed
@@ -113,6 +152,7 @@ export function EnrollAgentModal({ isOpen, onClose, onSuccess }) {
   const [error, setError] = useState(null);
   const [enrollmentId, setEnrollmentId] = useState(null);
   const [agentId, setAgentId] = useState(null);
+  const [canResume, setCanResume] = useState(false); // Can resume without password (SSH key installed)
 
   const abortControllerRef = useRef(null);
 
@@ -125,6 +165,7 @@ export function EnrollAgentModal({ isOpen, onClose, onSuccess }) {
     setError(null);
     setEnrollmentId(null);
     setAgentId(null);
+    setCanResume(false);
   }, []);
 
   const handleClose = useCallback(() => {
@@ -150,7 +191,9 @@ export function EnrollAgentModal({ isOpen, onClose, onSuccess }) {
     abortControllerRef.current = new AbortController();
 
     try {
-      const response = await endpoints.enrollAgent(formData);
+      // Always try SSH key first - handles retries where key is installed but server is hardened
+      const enrollData = { ...formData, try_key_first: true };
+      const response = await endpoints.enrollAgent(enrollData);
 
       if (!response.ok) {
         const errorData = await response.json();
@@ -233,6 +276,8 @@ export function EnrollAgentModal({ isOpen, onClose, onSuccess }) {
       case 'error':
         setPhase('failed');
         setError(data.message);
+        // Check if SSH key was installed - if so, we can resume without password
+        setCanResume(completedSteps.includes('key_installing'));
         setLogs((prev) => [...prev, { type: 'error', message: data.message }]);
         break;
 
@@ -254,7 +299,72 @@ export function EnrollAgentModal({ isOpen, onClose, onSuccess }) {
     setProgress(0);
     setError(null);
     setLogs([]);
+    setCanResume(false);
     handleEnroll();
+  };
+
+  // Resume enrollment using SSH key (no password required)
+  const handleResume = async () => {
+    if (!enrollmentId) {
+      setError('No enrollment ID available for resume');
+      return;
+    }
+
+    setPhase('enrolling');
+    setError(null);
+    setLogs((prev) => [...prev, { type: 'info', message: 'Resuming enrollment via SSH key...' }]);
+
+    abortControllerRef.current = new AbortController();
+
+    try {
+      const response = await endpoints.resumeEnrollment(enrollmentId);
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Resume failed');
+      }
+
+      // Handle SSE stream (same as enrollment)
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        let eventType = '';
+        let eventData = '';
+
+        for (const line of lines) {
+          if (line.startsWith('event:')) {
+            eventType = line.slice(6).trim();
+          } else if (line.startsWith('data:')) {
+            eventData = line.slice(5).trim();
+          } else if (line === '' && eventData) {
+            try {
+              const data = JSON.parse(eventData);
+              handleEvent(eventType, data);
+            } catch (e) {
+              console.error('Failed to parse event:', e);
+            }
+            eventType = '';
+            eventData = '';
+          }
+        }
+      }
+    } catch (err) {
+      if (err.name === 'AbortError') return;
+
+      setError(err.message);
+      setPhase('failed');
+      setLogs((prev) => [...prev, { type: 'error', message: err.message }]);
+    }
   };
 
   const handleSuccessClose = () => {
@@ -265,10 +375,13 @@ export function EnrollAgentModal({ isOpen, onClose, onSuccess }) {
   // Form phase
   if (phase === 'form') {
     return (
-      <Modal isOpen={isOpen} onClose={handleClose} title="Enroll New Agent" size="md">
+      <Modal isOpen={isOpen} onClose={handleClose} title={isReEnroll ? `Re-enroll Agent: ${reEnrollAgent?.name}` : "Enroll New Agent"} size="md">
         <div className="space-y-4">
           <p className="text-sm text-theme-muted mb-4">
-            Enter the SSH credentials for the server. The password is used once and never stored.
+            {isReEnroll
+              ? "Re-enroll this agent to reinstall the agent software and refresh its configuration. SSH password is required."
+              : "Enter the SSH credentials for the server. The password is used once and never stored."
+            }
           </p>
 
           <div className="grid grid-cols-3 gap-4">
@@ -381,7 +494,7 @@ export function EnrollAgentModal({ isOpen, onClose, onSuccess }) {
             className="gap-2"
           >
             <Server className="w-4 h-4" />
-            Enroll Agent
+            {isReEnroll ? 'Re-enroll Agent' : 'Enroll Agent'}
           </Button>
         </ModalFooter>
       </Modal>
@@ -473,10 +586,17 @@ export function EnrollAgentModal({ isOpen, onClose, onSuccess }) {
             <Button variant="ghost" onClick={handleClose}>
               Close
             </Button>
-            <Button onClick={handleRetry} className="gap-2">
-              <RefreshCw className="w-4 h-4" />
-              Retry
-            </Button>
+            {canResume ? (
+              <Button onClick={handleResume} className="gap-2">
+                <Play className="w-4 h-4" />
+                Resume
+              </Button>
+            ) : (
+              <Button onClick={handleRetry} className="gap-2">
+                <RefreshCw className="w-4 h-4" />
+                Retry
+              </Button>
+            )}
           </>
         )}
         {phase === 'success' && (

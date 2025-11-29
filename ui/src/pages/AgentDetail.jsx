@@ -16,6 +16,9 @@ import {
   Zap,
   Target,
   Edit2,
+  Archive,
+  RotateCcw,
+  PlayCircle,
 } from 'lucide-react';
 import {
   LineChart,
@@ -38,6 +41,7 @@ import { Modal } from '../components/Modal';
 import { Input } from '../components/Input';
 import { formatRelativeTime } from '../lib/utils';
 import { endpoints } from '../lib/api';
+import { EnrollAgentModal } from '../components/EnrollAgentModal';
 
 const TIME_WINDOWS = [
   { label: '1h', value: '1h' },
@@ -55,6 +59,8 @@ export function AgentDetail() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [showEditModal, setShowEditModal] = useState(false);
+  const [showReEnrollModal, setShowReEnrollModal] = useState(false);
+  const [archiving, setArchiving] = useState(false);
 
   const fetchAgent = async () => {
     try {
@@ -95,11 +101,41 @@ export function AgentDetail() {
     return () => clearInterval(interval);
   }, [id, timeWindow]);
 
+  const handleArchive = async () => {
+    if (!confirm(`Are you sure you want to archive agent "${agent.name}"? This will stop monitoring from this agent.`)) {
+      return;
+    }
+    setArchiving(true);
+    try {
+      await endpoints.archiveAgent(agent.id);
+      fetchAgent();
+    } catch (err) {
+      console.error('Failed to archive agent:', err);
+      alert('Failed to archive agent: ' + err.message);
+    } finally {
+      setArchiving(false);
+    }
+  };
+
+  const handleUnarchive = async () => {
+    setArchiving(true);
+    try {
+      await endpoints.unarchiveAgent(agent.id);
+      fetchAgent();
+    } catch (err) {
+      console.error('Failed to unarchive agent:', err);
+      alert('Failed to unarchive agent: ' + err.message);
+    } finally {
+      setArchiving(false);
+    }
+  };
+
   const getStatusColor = (status) => {
     switch (status) {
       case 'active': return 'healthy';
       case 'degraded': return 'degraded';
       case 'offline': return 'down';
+      case 'archived': return 'unknown';
       default: return 'unknown';
     }
   };
@@ -161,10 +197,25 @@ export function AgentDetail() {
         ]}
         actions={
           <div className="flex gap-3">
+            <Button variant="secondary" onClick={() => setShowReEnrollModal(true)} className="gap-2">
+              <PlayCircle className="w-4 h-4" />
+              Re-enroll
+            </Button>
             <Button variant="secondary" onClick={() => setShowEditModal(true)} className="gap-2">
               <Edit2 className="w-4 h-4" />
               Edit
             </Button>
+            {agent.archived_at ? (
+              <Button variant="secondary" onClick={handleUnarchive} disabled={archiving} className="gap-2">
+                <RotateCcw className={`w-4 h-4 ${archiving ? 'animate-spin' : ''}`} />
+                Unarchive
+              </Button>
+            ) : (
+              <Button variant="danger" onClick={handleArchive} disabled={archiving} className="gap-2">
+                <Archive className={`w-4 h-4 ${archiving ? 'animate-spin' : ''}`} />
+                Archive
+              </Button>
+            )}
             <Button variant="secondary" onClick={fetchAgent} className="gap-2">
               <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
               Refresh
@@ -525,6 +576,17 @@ export function AgentDetail() {
           }}
         />
       )}
+
+      {/* Re-enroll Agent Modal */}
+      <EnrollAgentModal
+        isOpen={showReEnrollModal}
+        onClose={() => setShowReEnrollModal(false)}
+        onSuccess={() => {
+          setShowReEnrollModal(false);
+          fetchAgent();
+        }}
+        reEnrollAgent={agent}
+      />
     </>
   );
 }

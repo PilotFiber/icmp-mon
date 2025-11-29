@@ -46,6 +46,7 @@ func (h *EnrollmentHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/enrollments", h.handleListEnrollments)
 	mux.HandleFunc("GET /api/v1/enrollments/{id}", h.handleGetEnrollment)
 	mux.HandleFunc("POST /api/v1/enrollments/{id}/retry", h.handleRetryEnrollment)
+	mux.HandleFunc("POST /api/v1/enrollments/{id}/resume", h.handleResumeEnrollment)
 	mux.HandleFunc("POST /api/v1/enrollments/{id}/cancel", h.handleCancelEnrollment)
 	mux.HandleFunc("DELETE /api/v1/enrollments/{id}", h.handleCancelEnrollment)
 	mux.HandleFunc("GET /api/v1/enrollments/{id}/logs", h.handleGetEnrollmentLogs)
@@ -54,15 +55,16 @@ func (h *EnrollmentHandler) RegisterRoutes(mux *http.ServeMux) {
 
 // enrollRequest is the request body for starting an enrollment.
 type enrollRequest struct {
-	TargetIP   string            `json:"target_ip"`
-	TargetPort int               `json:"target_port,omitempty"`
-	Username   string            `json:"username"`
-	Password   string            `json:"password"`
-	AgentName  string            `json:"agent_name,omitempty"`
-	Region     string            `json:"region,omitempty"`
-	Location   string            `json:"location,omitempty"`
-	Provider   string            `json:"provider,omitempty"`
-	Tags       map[string]string `json:"tags,omitempty"`
+	TargetIP    string            `json:"target_ip"`
+	TargetPort  int               `json:"target_port,omitempty"`
+	Username    string            `json:"username"`
+	Password    string            `json:"password"`
+	AgentName   string            `json:"agent_name,omitempty"`
+	Region      string            `json:"region,omitempty"`
+	Location    string            `json:"location,omitempty"`
+	Provider    string            `json:"provider,omitempty"`
+	Tags        map[string]string `json:"tags,omitempty"`
+	TryKeyFirst bool              `json:"try_key_first,omitempty"` // For re-enrollment: try SSH key auth before password
 }
 
 // handleEnroll starts a new agent enrollment with SSE streaming.
@@ -96,15 +98,16 @@ func (h *EnrollmentHandler) handleEnroll(w http.ResponseWriter, r *http.Request)
 
 	// Create enrollment request
 	enrollReq := enrollment.EnrollRequest{
-		TargetIP:   req.TargetIP,
-		TargetPort: port,
-		Username:   req.Username,
-		Password:   req.Password,
-		AgentName:  req.AgentName,
-		Region:     req.Region,
-		Location:   req.Location,
-		Provider:   req.Provider,
-		Tags:       req.Tags,
+		TargetIP:    req.TargetIP,
+		TargetPort:  port,
+		Username:    req.Username,
+		Password:    req.Password,
+		AgentName:   req.AgentName,
+		Region:      req.Region,
+		Location:    req.Location,
+		Provider:    req.Provider,
+		Tags:        req.Tags,
+		TryKeyFirst: req.TryKeyFirst,
 	}
 
 	// Check if client wants SSE streaming
@@ -199,6 +202,12 @@ func (h *EnrollmentHandler) handleListEnrollments(w http.ResponseWriter, r *http
 	})
 }
 
+// enrollmentResponse wraps enrollment with additional computed fields.
+type enrollmentResponse struct {
+	*enrollment.Enrollment
+	CanResume bool `json:"can_resume"`
+}
+
 // handleGetEnrollment returns a specific enrollment.
 // GET /api/v1/agents/enrollments/{id}
 func (h *EnrollmentHandler) handleGetEnrollment(w http.ResponseWriter, r *http.Request) {
@@ -208,19 +217,25 @@ func (h *EnrollmentHandler) handleGetEnrollment(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	enrollment, err := h.service.GetEnrollment(r.Context(), id)
+	enroll, err := h.service.GetEnrollment(r.Context(), id)
 	if err != nil {
 		h.logger.Error("failed to get enrollment", "id", id, "error", err)
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	if enrollment == nil {
+	if enroll == nil {
 		writeError(w, http.StatusNotFound, "enrollment not found")
 		return
 	}
 
-	writeJSON(w, http.StatusOK, enrollment)
+	// Include can_resume flag
+	resp := enrollmentResponse{
+		Enrollment: enroll,
+		CanResume:  h.service.CanResume(enroll),
+	}
+
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // handleRetryEnrollment retries a failed enrollment.
@@ -295,6 +310,81 @@ func (h *EnrollmentHandler) handleRetrySSE(w http.ResponseWriter, r *http.Reques
 			flusher.Flush()
 
 		case <-r.Context().Done():
+			return
+		}
+	}
+}
+
+// handleResumeEnrollment resumes a failed enrollment using SSH key auth.
+// POST /api/v1/enrollments/{id}/resume
+// This can only be used if the SSH key has already been installed.
+func (h *EnrollmentHandler) handleResumeEnrollment(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "enrollment id required")
+		return
+	}
+
+	// Check if client wants SSE streaming
+	acceptHeader := r.Header.Get("Accept")
+	if strings.Contains(acceptHeader, "text/event-stream") {
+		h.handleResumeSSE(w, r, id)
+		return
+	}
+
+	result, err := h.service.Resume(r.Context(), id, nil)
+	if err != nil {
+		h.logger.Error("resume failed", "id", id, "error", err)
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusAccepted, result)
+}
+
+// handleResumeSSE handles resume with SSE streaming.
+func (h *EnrollmentHandler) handleResumeSSE(w http.ResponseWriter, r *http.Request, id string) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "streaming not supported")
+		return
+	}
+
+	events := make(chan enrollment.Event, 100)
+
+	// Use background context so enrollment continues even if client disconnects
+	ctx := context.Background()
+
+	go func() {
+		_, err := h.service.Resume(ctx, id, events)
+		if err != nil {
+			h.logger.Error("resume failed", "id", id, "error", err)
+		}
+	}()
+
+	for {
+		select {
+		case event, ok := <-events:
+			if !ok {
+				return
+			}
+
+			data, err := json.Marshal(event)
+			if err != nil {
+				continue
+			}
+
+			fmt.Fprintf(w, "event: %s\n", event.Type)
+			fmt.Fprintf(w, "data: %s\n\n", data)
+			flusher.Flush()
+
+		case <-r.Context().Done():
+			h.logger.Info("client disconnected, resume continues in background")
 			return
 		}
 	}

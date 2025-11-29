@@ -283,6 +283,79 @@ func (s *Store) UpdateAgentInfo(ctx context.Context, agentID string, name, regio
 	return nil
 }
 
+// SetAgentAPIKey stores a hashed API key for an agent.
+// The key should be hashed with bcrypt before calling this method.
+func (s *Store) SetAgentAPIKey(ctx context.Context, agentID, keyHash string) error {
+	result, err := s.pool.Exec(ctx, `
+		UPDATE agents SET
+			api_key_hash = $2,
+			api_key_created_at = NOW(),
+			updated_at = NOW()
+		WHERE id = $1
+	`, agentID, keyHash)
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("agent not found: %s", agentID)
+	}
+	return nil
+}
+
+// GetAgentAPIKeyHash retrieves the hashed API key for an agent.
+// Returns empty string if no key is set.
+func (s *Store) GetAgentAPIKeyHash(ctx context.Context, agentID string) (string, error) {
+	var keyHash *string
+	err := s.pool.QueryRow(ctx, `
+		SELECT api_key_hash FROM agents WHERE id = $1 AND archived_at IS NULL
+	`, agentID).Scan(&keyHash)
+	if err == pgx.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	if keyHash == nil {
+		return "", nil
+	}
+	return *keyHash, nil
+}
+
+// SetAgentTailscaleIP stores the Tailscale IP for an agent.
+func (s *Store) SetAgentTailscaleIP(ctx context.Context, agentID, tailscaleIP string) error {
+	result, err := s.pool.Exec(ctx, `
+		UPDATE agents SET
+			tailscale_ip = $2::inet,
+			updated_at = NOW()
+		WHERE id = $1
+	`, agentID, tailscaleIP)
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("agent not found: %s", agentID)
+	}
+	return nil
+}
+
+// RevokeAgentAPIKey clears the API key for an agent (revocation).
+func (s *Store) RevokeAgentAPIKey(ctx context.Context, agentID string) error {
+	result, err := s.pool.Exec(ctx, `
+		UPDATE agents SET
+			api_key_hash = NULL,
+			api_key_created_at = NULL,
+			updated_at = NOW()
+		WHERE id = $1
+	`, agentID)
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("agent not found: %s", agentID)
+	}
+	return nil
+}
+
 // RecordAgentMetrics stores agent health metrics.
 func (s *Store) RecordAgentMetrics(ctx context.Context, agentID string, heartbeat types.Heartbeat) error {
 	_, err := s.pool.Exec(ctx, `
@@ -427,14 +500,17 @@ func (s *Store) GetAgentCurrentStats(ctx context.Context, agentID string) (*Agen
 type FleetOverview struct {
 	TotalAgents       int     `json:"total_agents"`
 	ActiveAgents      int     `json:"active_agents"`
-	DegradedAgents    int     `json:"degraded_agents"`
-	OfflineAgents     int     `json:"offline_agents"`
-	TotalTargets      int     `json:"total_targets"`
-	TotalActiveTargets int    `json:"total_active_targets"`
-	TotalProbesPerSec float64 `json:"total_probes_per_second"`
-	TotalResultsQueued int    `json:"total_results_queued"`
-	AvgCPUPercent     float64 `json:"avg_cpu_percent"`
-	AvgMemoryMB       float64 `json:"avg_memory_mb"`
+	DegradedAgents     int     `json:"degraded_agents"`
+	OfflineAgents      int     `json:"offline_agents"`
+	TotalTargets       int     `json:"total_targets"`
+	TotalActiveTargets int     `json:"total_active_targets"`
+	MonitorableTargets int     `json:"monitorable_targets"`
+	HealthyTargets     int     `json:"healthy_targets"`
+	HealthPercentage   float64 `json:"health_percentage"`
+	TotalProbesPerSec  float64 `json:"total_probes_per_second"`
+	TotalResultsQueued int     `json:"total_results_queued"`
+	AvgCPUPercent      float64 `json:"avg_cpu_percent"`
+	AvgMemoryMB        float64 `json:"avg_memory_mb"`
 }
 
 // GetFleetOverview returns aggregated stats for all agents.
@@ -472,12 +548,23 @@ func (s *Store) GetFleetOverview(ctx context.Context) (*FleetOverview, error) {
 		return nil, err
 	}
 
-	// Get target counts with active monitoring state
+	// Get target counts with active monitoring state and health stats
 	err = s.pool.QueryRow(ctx, `
-		SELECT COUNT(*) FROM targets WHERE archived_at IS NULL AND monitoring_state = 'active'
-	`).Scan(&overview.TotalActiveTargets)
+		SELECT
+			COUNT(*) FILTER (WHERE monitoring_state = 'active') as active,
+			COUNT(*) FILTER (WHERE baseline_established_at IS NOT NULL
+				AND monitoring_state IN ('active', 'degraded', 'down')) as monitorable,
+			COUNT(*) FILTER (WHERE baseline_established_at IS NOT NULL
+				AND monitoring_state = 'active') as healthy
+		FROM targets WHERE archived_at IS NULL
+	`).Scan(&overview.TotalActiveTargets, &overview.MonitorableTargets, &overview.HealthyTargets)
 	if err != nil {
 		return nil, err
+	}
+
+	// Calculate health percentage
+	if overview.MonitorableTargets > 0 {
+		overview.HealthPercentage = float64(overview.HealthyTargets) / float64(overview.MonitorableTargets) * 100.0
 	}
 
 	// Get latest metrics aggregates from recent heartbeats
@@ -668,7 +755,7 @@ func (s *Store) ListTargets(ctx context.Context) ([]types.Target, error) {
 			subnet_id, ownership, origin, ip_type,
 			monitoring_state, state_changed_at, needs_review, discovery_attempts, last_response_at,
 			first_response_at, baseline_established_at,
-			archived_at, archive_reason, expected_outcome, created_at, updated_at
+			archived_at, archive_reason, expected_outcome, created_at, updated_at, is_representative
 		FROM targets ORDER BY ip_address
 	`)
 	if err != nil {
@@ -750,7 +837,7 @@ func (s *Store) ListTargetsPaginated(ctx context.Context, params TargetListParam
 			subnet_id, ownership, origin, ip_type,
 			monitoring_state, state_changed_at, needs_review, discovery_attempts, last_response_at,
 			first_response_at, baseline_established_at,
-			archived_at, archive_reason, expected_outcome, created_at, updated_at
+			archived_at, archive_reason, expected_outcome, created_at, updated_at, is_representative
 		FROM targets
 		WHERE %s
 		ORDER BY ip_address
@@ -786,7 +873,7 @@ func (s *Store) ListTargetsByTier(ctx context.Context, tier string) ([]types.Tar
 			subnet_id, ownership, origin, ip_type,
 			monitoring_state, state_changed_at, needs_review, discovery_attempts, last_response_at,
 			first_response_at, baseline_established_at,
-			archived_at, archive_reason, expected_outcome, created_at, updated_at
+			archived_at, archive_reason, expected_outcome, created_at, updated_at, is_representative
 		FROM targets WHERE tier = $1 ORDER BY ip_address
 	`, tier)
 	if err != nil {
@@ -954,45 +1041,76 @@ func (s *Store) DeleteTier(ctx context.Context, name string) error {
 // =============================================================================
 
 // InsertProbeResults inserts a batch of probe results.
-// Uses batch INSERT with ON CONFLICT DO NOTHING to handle duplicate timestamps gracefully.
+// Uses a staging table approach to compute agent_region, target_region, and is_in_market via JOINs.
 func (s *Store) InsertProbeResults(ctx context.Context, results []types.ProbeResult) error {
 	if len(results) == 0 {
 		return nil
 	}
 
-	// Build batch INSERT with ON CONFLICT DO NOTHING
-	// This handles the case where agents submit results with duplicate timestamps
-	const batchSize = 500
-	for i := 0; i < len(results); i += batchSize {
-		end := i + batchSize
-		if end > len(results) {
-			end = len(results)
-		}
-		batch := results[i:end]
+	// Use a transaction with a temp staging table for efficient bulk insert with JOINs
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
 
-		// Build the query with placeholders
-		var query strings.Builder
-		query.WriteString(`INSERT INTO probe_results (time, target_id, agent_id, success, error_message, latency_ms, packet_loss_pct, payload) VALUES `)
+	// Create temp table for staging
+	_, err = tx.Exec(ctx, `
+		CREATE TEMP TABLE probe_results_staging (
+			time TIMESTAMPTZ NOT NULL,
+			target_id UUID NOT NULL,
+			agent_id UUID NOT NULL,
+			success BOOLEAN NOT NULL,
+			error_message TEXT,
+			latency_ms DOUBLE PRECISION,
+			packet_loss_pct DOUBLE PRECISION,
+			payload JSONB
+		) ON COMMIT DROP
+	`)
+	if err != nil {
+		return fmt.Errorf("create staging table: %w", err)
+	}
 
-		args := make([]any, 0, len(batch)*8)
-		for j, r := range batch {
-			if j > 0 {
-				query.WriteString(", ")
-			}
-			base := j * 8
-			query.WriteString(fmt.Sprintf("($%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d)",
-				base+1, base+2, base+3, base+4, base+5, base+6, base+7, base+8))
-			args = append(args, r.Timestamp, r.TargetID, r.AgentID, r.Success, r.Error,
-				getLatency(r.Payload), getPacketLoss(r.Payload), r.Payload)
-		}
-		query.WriteString(" ON CONFLICT (time, target_id, agent_id) DO NOTHING")
-
-		_, err := s.pool.Exec(ctx, query.String(), args...)
-		if err != nil {
-			return fmt.Errorf("batch insert failed: %w", err)
+	// COPY data into staging table
+	rows := make([][]any, len(results))
+	for i, r := range results {
+		rows[i] = []any{
+			r.Timestamp, r.TargetID, r.AgentID, r.Success, r.Error,
+			getLatency(r.Payload), getPacketLoss(r.Payload), r.Payload,
 		}
 	}
-	return nil
+
+	_, err = tx.CopyFrom(ctx,
+		pgx.Identifier{"probe_results_staging"},
+		[]string{"time", "target_id", "agent_id", "success", "error_message", "latency_ms", "packet_loss_pct", "payload"},
+		pgx.CopyFromRows(rows),
+	)
+	if err != nil {
+		return fmt.Errorf("copy to staging: %w", err)
+	}
+
+	// INSERT from staging to permanent table, computing region columns via JOINs
+	_, err = tx.Exec(ctx, `
+		INSERT INTO probe_results (time, target_id, agent_id, success, error_message, latency_ms, packet_loss_pct, payload,
+		                           agent_region, target_region, is_in_market)
+		SELECT
+			s.time, s.target_id, s.agent_id, s.success, s.error_message, s.latency_ms, s.packet_loss_pct, s.payload,
+			LOWER(TRIM(a.region)),
+			LOWER(TRIM(sub.region)),
+			(LOWER(TRIM(COALESCE(a.region, ''))) = LOWER(TRIM(COALESCE(sub.region, '')))
+			 AND a.region IS NOT NULL AND a.region != ''
+			 AND sub.region IS NOT NULL AND sub.region != '')
+		FROM probe_results_staging s
+		JOIN agents a ON s.agent_id = a.id
+		LEFT JOIN targets t ON s.target_id = t.id
+		LEFT JOIN subnets sub ON t.subnet_id = sub.id
+		ON CONFLICT (time, target_id, agent_id) DO NOTHING
+	`)
+	if err != nil {
+		return fmt.Errorf("insert from staging: %w", err)
+	}
+
+	return tx.Commit(ctx)
 }
 
 // GetRecentResults returns recent probe results for a target.
@@ -1221,6 +1339,8 @@ type AgentHistoryPoint struct {
 	Time          time.Time `json:"time"`
 	AgentID       string    `json:"agent_id"`
 	AgentName     string    `json:"agent_name"`
+	AgentRegion   *string   `json:"agent_region,omitempty"`
+	IsInMarket    bool      `json:"is_in_market"`
 	AvgLatencyMs  *float64  `json:"avg_latency_ms"`
 	MinLatencyMs  *float64  `json:"min_latency_ms"`
 	MaxLatencyMs  *float64  `json:"max_latency_ms"`
@@ -1235,6 +1355,15 @@ func (s *Store) GetTargetHistoryByAgent(ctx context.Context, targetID string, wi
 	cutoffTime := time.Now().Add(-window)
 	bucketInterval := fmt.Sprintf("%d seconds", int(bucketSize.Seconds()))
 
+	// Get the target's subnet region for is_in_market calculation
+	var targetRegion *string
+	_ = s.pool.QueryRow(ctx, `
+		SELECT LOWER(TRIM(s.region))
+		FROM targets t
+		LEFT JOIN subnets s ON t.subnet_id = s.id
+		WHERE t.id = $1
+	`, targetID).Scan(&targetRegion)
+
 	// Choose the right source based on bucket size
 	// < 1h: raw probe_results, 1h-24h: probe_hourly, > 24h: probe_daily
 	var query string
@@ -1244,6 +1373,7 @@ func (s *Store) GetTargetHistoryByAgent(ctx context.Context, targetID string, wi
 				time_bucket($3::interval, pr.time) as bucket,
 				pr.agent_id,
 				COALESCE(a.name, pr.agent_id::text) as agent_name,
+				a.region as agent_region,
 				AVG(pr.latency_ms) FILTER (WHERE pr.success) as avg_latency_ms,
 				MIN(pr.latency_ms) FILTER (WHERE pr.success) as min_latency_ms,
 				MAX(pr.latency_ms) FILTER (WHERE pr.success) as max_latency_ms,
@@ -1253,7 +1383,7 @@ func (s *Store) GetTargetHistoryByAgent(ctx context.Context, targetID string, wi
 			FROM probe_results pr
 			LEFT JOIN agents a ON a.id = pr.agent_id
 			WHERE pr.target_id = $1 AND pr.time > $2
-			GROUP BY bucket, pr.agent_id, a.name
+			GROUP BY bucket, pr.agent_id, a.name, a.region
 			ORDER BY bucket ASC, a.name
 		`
 	} else if window <= 24*time.Hour {
@@ -1262,6 +1392,7 @@ func (s *Store) GetTargetHistoryByAgent(ctx context.Context, targetID string, wi
 				time_bucket($3::interval, ph.bucket) as bucket,
 				ph.agent_id,
 				COALESCE(a.name, ph.agent_id::text) as agent_name,
+				a.region as agent_region,
 				AVG(ph.avg_latency) as avg_latency_ms,
 				MIN(ph.min_latency) as min_latency_ms,
 				MAX(ph.max_latency) as max_latency_ms,
@@ -1271,7 +1402,7 @@ func (s *Store) GetTargetHistoryByAgent(ctx context.Context, targetID string, wi
 			FROM probe_hourly ph
 			LEFT JOIN agents a ON a.id = ph.agent_id
 			WHERE ph.target_id = $1 AND ph.bucket > $2
-			GROUP BY time_bucket($3::interval, ph.bucket), ph.agent_id, a.name
+			GROUP BY time_bucket($3::interval, ph.bucket), ph.agent_id, a.name, a.region
 			ORDER BY bucket ASC, a.name
 		`
 	} else {
@@ -1280,6 +1411,7 @@ func (s *Store) GetTargetHistoryByAgent(ctx context.Context, targetID string, wi
 				time_bucket($3::interval, pd.bucket) as bucket,
 				pd.agent_id,
 				COALESCE(a.name, pd.agent_id::text) as agent_name,
+				a.region as agent_region,
 				AVG(pd.avg_latency) as avg_latency_ms,
 				MIN(pd.min_latency) as min_latency_ms,
 				MAX(pd.max_latency) as max_latency_ms,
@@ -1289,7 +1421,7 @@ func (s *Store) GetTargetHistoryByAgent(ctx context.Context, targetID string, wi
 			FROM probe_daily pd
 			LEFT JOIN agents a ON a.id = pd.agent_id
 			WHERE pd.target_id = $1 AND pd.bucket > $2
-			GROUP BY time_bucket($3::interval, pd.bucket), pd.agent_id, a.name
+			GROUP BY time_bucket($3::interval, pd.bucket), pd.agent_id, a.name, a.region
 			ORDER BY bucket ASC, a.name
 		`
 	}
@@ -1305,11 +1437,16 @@ func (s *Store) GetTargetHistoryByAgent(ctx context.Context, targetID string, wi
 		var point AgentHistoryPoint
 		if err := rows.Scan(
 			&point.Time,
-			&point.AgentID, &point.AgentName,
+			&point.AgentID, &point.AgentName, &point.AgentRegion,
 			&point.AvgLatencyMs, &point.MinLatencyMs, &point.MaxLatencyMs,
 			&point.PacketLossPct, &point.SuccessCount, &point.TotalCount,
 		); err != nil {
 			return nil, err
+		}
+		// Calculate is_in_market based on agent region matching target region
+		if targetRegion != nil && point.AgentRegion != nil {
+			agentRegionLower := strings.ToLower(strings.TrimSpace(*point.AgentRegion))
+			point.IsInMarket = agentRegionLower == *targetRegion
 		}
 		history = append(history, point)
 	}
@@ -1323,6 +1460,7 @@ type LiveProbeResult struct {
 	AgentName     string    `json:"agent_name"`
 	AgentRegion   string    `json:"agent_region"`
 	AgentProvider string    `json:"agent_provider"`
+	IsInMarket    bool      `json:"is_in_market"`
 	LatencyMs     *float64  `json:"latency_ms"`
 	PacketLossPct float64   `json:"packet_loss_pct"`
 	Success       bool      `json:"success"`
@@ -1346,6 +1484,7 @@ func (s *Store) GetTargetLiveResults(ctx context.Context, targetID string, secon
 			COALESCE(a.name, pr.agent_id::text) as agent_name,
 			COALESCE(a.region, '') as agent_region,
 			COALESCE(a.provider, '') as agent_provider,
+			COALESCE(pr.is_in_market, false) as is_in_market,
 			pr.latency_ms,
 			pr.packet_loss_pct,
 			pr.success
@@ -1365,7 +1504,7 @@ func (s *Store) GetTargetLiveResults(ctx context.Context, targetID string, secon
 		var r LiveProbeResult
 		if err := rows.Scan(
 			&r.Time,
-			&r.AgentID, &r.AgentName, &r.AgentRegion, &r.AgentProvider,
+			&r.AgentID, &r.AgentName, &r.AgentRegion, &r.AgentProvider, &r.IsInMarket,
 			&r.LatencyMs, &r.PacketLossPct, &r.Success,
 		); err != nil {
 			return nil, err
@@ -1419,6 +1558,257 @@ func (s *Store) GetLatencyTrend(ctx context.Context, window time.Duration, bucke
 	return history, nil
 }
 
+// =============================================================================
+// IN-MARKET LATENCY & REGION MATRIX
+// =============================================================================
+
+// LatencyBreakdown contains in-market latency stats for a target.
+type LatencyBreakdown struct {
+	InMarketAvgLatencyMs *float64 `json:"in_market_avg_latency_ms,omitempty"`
+	InMarketP95LatencyMs *float64 `json:"in_market_p95_latency_ms,omitempty"`
+	InMarketMinLatencyMs *float64 `json:"in_market_min_latency_ms,omitempty"`
+	InMarketMaxLatencyMs *float64 `json:"in_market_max_latency_ms,omitempty"`
+	InMarketAgentCount   int      `json:"in_market_agent_count"`
+	SubnetRegion         *string  `json:"subnet_region,omitempty"`
+	HasInMarketCoverage  bool     `json:"has_in_market_coverage"`
+}
+
+// RegionLatencyCell represents one cell in the city-to-city latency matrix.
+type RegionLatencyCell struct {
+	AgentRegion   string   `json:"agent_region"`
+	TargetRegion  string   `json:"target_region"`
+	AvgLatencyMs  *float64 `json:"avg_latency_ms"`
+	P95LatencyMs  *float64 `json:"p95_latency_ms"`
+	MinLatencyMs  *float64 `json:"min_latency_ms"`
+	MaxLatencyMs  *float64 `json:"max_latency_ms"`
+	PacketLossPct *float64 `json:"packet_loss_pct"`
+	ProbeCount    int      `json:"probe_count"`
+	AgentCount    int      `json:"agent_count"`
+	TargetCount   int      `json:"target_count"`
+	IsInMarket    bool     `json:"is_in_market"`
+}
+
+// RegionLatencyMatrix contains the full city-to-city latency matrix.
+type RegionLatencyMatrix struct {
+	AgentRegions  []string            `json:"agent_regions"`
+	TargetRegions []string            `json:"target_regions"`
+	Cells         []RegionLatencyCell `json:"cells"`
+	TimeWindow    string              `json:"time_window"`
+}
+
+// GetTargetLatencyBreakdown returns in-market latency statistics for a target.
+func (s *Store) GetTargetLatencyBreakdown(ctx context.Context, targetID string, window time.Duration) (*LatencyBreakdown, error) {
+	cutoffTime := time.Now().Add(-window)
+
+	var breakdown LatencyBreakdown
+
+	// First, get the target's subnet region
+	err := s.pool.QueryRow(ctx, `
+		SELECT s.region
+		FROM targets t
+		LEFT JOIN subnets s ON t.subnet_id = s.id
+		WHERE t.id = $1
+	`, targetID).Scan(&breakdown.SubnetRegion)
+	if err != nil && err != pgx.ErrNoRows {
+		return nil, fmt.Errorf("get target region: %w", err)
+	}
+
+	// Query in-market latency stats
+	err = s.pool.QueryRow(ctx, `
+		SELECT
+			AVG(latency_ms) FILTER (WHERE success) as avg_latency,
+			percentile_cont(0.95) WITHIN GROUP (ORDER BY latency_ms) FILTER (WHERE success) as p95_latency,
+			MIN(latency_ms) FILTER (WHERE success) as min_latency,
+			MAX(latency_ms) FILTER (WHERE success) as max_latency,
+			COUNT(DISTINCT agent_id) as agent_count
+		FROM probe_results
+		WHERE target_id = $1
+		  AND time > $2
+		  AND is_in_market = true
+	`, targetID, cutoffTime).Scan(
+		&breakdown.InMarketAvgLatencyMs,
+		&breakdown.InMarketP95LatencyMs,
+		&breakdown.InMarketMinLatencyMs,
+		&breakdown.InMarketMaxLatencyMs,
+		&breakdown.InMarketAgentCount,
+	)
+	if err != nil && err != pgx.ErrNoRows {
+		return nil, fmt.Errorf("get in-market stats: %w", err)
+	}
+
+	breakdown.HasInMarketCoverage = breakdown.InMarketAgentCount > 0
+
+	return &breakdown, nil
+}
+
+// GetInMarketLatencyTrend returns in-market latency trend for the dashboard.
+// Gateway IPs have NULL is_in_market (set at insert time), so they're automatically excluded.
+func (s *Store) GetInMarketLatencyTrend(ctx context.Context, window time.Duration, bucketSize time.Duration) ([]ProbeHistoryPoint, error) {
+	cutoffTime := time.Now().Add(-window)
+	bucketInterval := fmt.Sprintf("%d seconds", int(bucketSize.Seconds()))
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT
+			time_bucket($2::interval, time) as bucket,
+			AVG(latency_ms) FILTER (WHERE success) as avg_latency_ms,
+			MIN(latency_ms) FILTER (WHERE success) as min_latency_ms,
+			MAX(latency_ms) FILTER (WHERE success) as max_latency_ms,
+			percentile_cont(0.95) WITHIN GROUP (ORDER BY latency_ms) FILTER (WHERE success) as p95_latency_ms,
+			AVG(packet_loss_pct) as packet_loss_pct,
+			SUM(CASE WHEN success THEN 1 ELSE 0 END) as success_count,
+			COUNT(*) as total_count
+		FROM probe_results
+		WHERE time > $1
+		  AND is_in_market = true
+		GROUP BY bucket
+		ORDER BY bucket ASC
+	`, cutoffTime, bucketInterval)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var history []ProbeHistoryPoint
+	for rows.Next() {
+		var point ProbeHistoryPoint
+		var p95 *float64
+		if err := rows.Scan(
+			&point.Time,
+			&point.AvgLatencyMs, &point.MinLatencyMs, &point.MaxLatencyMs, &p95,
+			&point.PacketLossPct, &point.SuccessCount, &point.TotalCount,
+		); err != nil {
+			return nil, err
+		}
+		if p95 != nil {
+			point.MaxLatencyMs = p95
+		}
+		history = append(history, point)
+	}
+	return history, nil
+}
+
+// GetRegionLatencyMatrix returns the city-to-city latency matrix.
+func (s *Store) GetRegionLatencyMatrix(ctx context.Context, window time.Duration) (*RegionLatencyMatrix, error) {
+	cutoffTime := time.Now().Add(-window)
+
+	// Query matrix data directly from probe_results for real-time data
+	// The continuous aggregate only refreshes hourly, so we query raw data
+	// Gateway IPs have NULL regions (set at insert time), so they're automatically excluded
+	rows, err := s.pool.Query(ctx, `
+		SELECT
+			agent_region,
+			target_region,
+			AVG(latency_ms) FILTER (WHERE success) as avg_latency,
+			PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY latency_ms) FILTER (WHERE success) as p95_latency,
+			MIN(latency_ms) FILTER (WHERE success) as min_latency,
+			MAX(latency_ms) FILTER (WHERE success) as max_latency,
+			AVG(packet_loss_pct) as packet_loss,
+			COUNT(*)::int as probe_count,
+			COUNT(DISTINCT agent_id)::int as agent_count,
+			COUNT(DISTINCT target_id)::int as target_count
+		FROM probe_results
+		WHERE time > $1
+		  AND agent_region IS NOT NULL
+		  AND target_region IS NOT NULL
+		GROUP BY agent_region, target_region
+		ORDER BY agent_region, target_region
+	`, cutoffTime)
+	if err != nil {
+		return nil, fmt.Errorf("query matrix: %w", err)
+	}
+	defer rows.Close()
+
+	agentRegionSet := make(map[string]bool)
+	targetRegionSet := make(map[string]bool)
+	var cells []RegionLatencyCell
+
+	for rows.Next() {
+		var cell RegionLatencyCell
+		if err := rows.Scan(
+			&cell.AgentRegion, &cell.TargetRegion,
+			&cell.AvgLatencyMs, &cell.P95LatencyMs, &cell.MinLatencyMs, &cell.MaxLatencyMs,
+			&cell.PacketLossPct, &cell.ProbeCount, &cell.AgentCount, &cell.TargetCount,
+		); err != nil {
+			return nil, fmt.Errorf("scan matrix row: %w", err)
+		}
+		cell.IsInMarket = cell.AgentRegion == cell.TargetRegion
+		cells = append(cells, cell)
+		agentRegionSet[cell.AgentRegion] = true
+		targetRegionSet[cell.TargetRegion] = true
+	}
+
+	// Extract sorted unique region lists
+	agentRegions := make([]string, 0, len(agentRegionSet))
+	for r := range agentRegionSet {
+		agentRegions = append(agentRegions, r)
+	}
+	targetRegions := make([]string, 0, len(targetRegionSet))
+	for r := range targetRegionSet {
+		targetRegions = append(targetRegions, r)
+	}
+
+	// Sort regions alphabetically
+	sortStrings(agentRegions)
+	sortStrings(targetRegions)
+
+	return &RegionLatencyMatrix{
+		AgentRegions:  agentRegions,
+		TargetRegions: targetRegions,
+		Cells:         cells,
+		TimeWindow:    window.String(),
+	}, nil
+}
+
+// sortStrings sorts a string slice in place.
+func sortStrings(s []string) {
+	for i := 0; i < len(s)-1; i++ {
+		for j := i + 1; j < len(s); j++ {
+			if s[i] > s[j] {
+				s[i], s[j] = s[j], s[i]
+			}
+		}
+	}
+}
+
+// GetTargetHistoryInMarket returns in-market only probe history for a target.
+func (s *Store) GetTargetHistoryInMarket(ctx context.Context, targetID string, window time.Duration, bucketSize time.Duration) ([]ProbeHistoryPoint, error) {
+	cutoffTime := time.Now().Add(-window)
+	bucketInterval := fmt.Sprintf("%d seconds", int(bucketSize.Seconds()))
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT
+			time_bucket($3::interval, time) as bucket,
+			AVG(latency_ms) FILTER (WHERE success) as avg_latency_ms,
+			MIN(latency_ms) FILTER (WHERE success) as min_latency_ms,
+			MAX(latency_ms) FILTER (WHERE success) as max_latency_ms,
+			AVG(packet_loss_pct) as packet_loss_pct,
+			SUM(CASE WHEN success THEN 1 ELSE 0 END) as success_count,
+			COUNT(*) as total_count
+		FROM probe_results
+		WHERE target_id = $1 AND time > $2 AND is_in_market = true
+		GROUP BY bucket
+		ORDER BY bucket ASC
+	`, targetID, cutoffTime, bucketInterval)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var history []ProbeHistoryPoint
+	for rows.Next() {
+		var point ProbeHistoryPoint
+		if err := rows.Scan(
+			&point.Time,
+			&point.AvgLatencyMs, &point.MinLatencyMs, &point.MaxLatencyMs,
+			&point.PacketLossPct, &point.SuccessCount, &point.TotalCount,
+		); err != nil {
+			return nil, err
+		}
+		history = append(history, point)
+	}
+	return history, nil
+}
+
 // getMinAgentsForTier returns the minimum number of agents required for a target to be healthy.
 func getMinAgentsForTier(tier string, total int) int {
 	switch tier {
@@ -1455,6 +1845,7 @@ func calculateStatus(reachable, total int, packetLoss *float64) string {
 type Command struct {
 	ID          string            `json:"id"`
 	CommandType string            `json:"command_type"`
+	TargetID    string            `json:"target_id,omitempty"`
 	TargetIP    string            `json:"target_ip,omitempty"`
 	Params      map[string]any    `json:"params,omitempty"`
 	AgentIDs    []string          `json:"agent_ids,omitempty"`
@@ -1479,10 +1870,14 @@ type CommandResult struct {
 // CreateCommand creates a new command for agents.
 func (s *Store) CreateCommand(ctx context.Context, cmd *Command) error {
 	paramsJSON, _ := json.Marshal(cmd.Params)
+	var targetID interface{}
+	if cmd.TargetID != "" {
+		targetID = cmd.TargetID
+	}
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO commands (id, command_type, target_ip, params, agent_ids, status, requested_by, requested_at, expires_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-	`, cmd.ID, cmd.CommandType, cmd.TargetIP, paramsJSON, cmd.AgentIDs, cmd.Status, cmd.RequestedBy, cmd.RequestedAt, cmd.ExpiresAt)
+		INSERT INTO commands (id, command_type, target_id, target_ip, params, agent_ids, status, requested_by, requested_at, expires_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+	`, cmd.ID, cmd.CommandType, targetID, cmd.TargetIP, paramsJSON, cmd.AgentIDs, cmd.Status, cmd.RequestedBy, cmd.RequestedAt, cmd.ExpiresAt)
 	return err
 }
 
@@ -1490,12 +1885,12 @@ func (s *Store) CreateCommand(ctx context.Context, cmd *Command) error {
 func (s *Store) GetCommand(ctx context.Context, id string) (*Command, error) {
 	var cmd Command
 	var paramsJSON []byte
-	var targetIP *string
+	var targetID, targetIP *string
 	err := s.pool.QueryRow(ctx, `
-		SELECT id, command_type, host(target_ip), params, agent_ids, status, requested_by, requested_at, expires_at
+		SELECT id, command_type, target_id::text, host(target_ip), params, agent_ids, status, requested_by, requested_at, expires_at
 		FROM commands WHERE id = $1
 	`, id).Scan(
-		&cmd.ID, &cmd.CommandType, &targetIP, &paramsJSON, &cmd.AgentIDs,
+		&cmd.ID, &cmd.CommandType, &targetID, &targetIP, &paramsJSON, &cmd.AgentIDs,
 		&cmd.Status, &cmd.RequestedBy, &cmd.RequestedAt, &cmd.ExpiresAt,
 	)
 	if err == pgx.ErrNoRows {
@@ -1503,6 +1898,9 @@ func (s *Store) GetCommand(ctx context.Context, id string) (*Command, error) {
 	}
 	if err != nil {
 		return nil, err
+	}
+	if targetID != nil {
+		cmd.TargetID = *targetID
 	}
 	if targetIP != nil {
 		cmd.TargetIP = *targetIP
@@ -1596,6 +1994,62 @@ func (s *Store) GetCommandResults(ctx context.Context, commandID string) ([]Comm
 func (s *Store) UpdateCommandStatus(ctx context.Context, commandID string, status string) error {
 	_, err := s.pool.Exec(ctx, `UPDATE commands SET status = $2 WHERE id = $1`, commandID, status)
 	return err
+}
+
+// CommandWithResults includes a command and summary info about its results.
+type CommandWithResults struct {
+	Command
+	ResultCount   int `json:"result_count"`
+	SuccessCount  int `json:"success_count"`
+	FailureCount  int `json:"failure_count"`
+}
+
+// GetCommandsByTarget returns commands for a specific target.
+func (s *Store) GetCommandsByTarget(ctx context.Context, targetID string, limit int) ([]CommandWithResults, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT
+			c.id, c.command_type, c.target_id::text, host(c.target_ip), c.params, c.agent_ids,
+			c.status, c.requested_by, c.requested_at, c.expires_at,
+			COUNT(cr.agent_id) as result_count,
+			COUNT(cr.agent_id) FILTER (WHERE cr.success) as success_count,
+			COUNT(cr.agent_id) FILTER (WHERE NOT cr.success) as failure_count
+		FROM commands c
+		LEFT JOIN command_results cr ON c.id = cr.command_id
+		WHERE c.target_id = $1
+		GROUP BY c.id
+		ORDER BY c.requested_at DESC
+		LIMIT $2
+	`, targetID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var commands []CommandWithResults
+	for rows.Next() {
+		var cmd CommandWithResults
+		var paramsJSON []byte
+		var targetIDVal, targetIP *string
+		if err := rows.Scan(
+			&cmd.ID, &cmd.CommandType, &targetIDVal, &targetIP, &paramsJSON, &cmd.AgentIDs,
+			&cmd.Status, &cmd.RequestedBy, &cmd.RequestedAt, &cmd.ExpiresAt,
+			&cmd.ResultCount, &cmd.SuccessCount, &cmd.FailureCount,
+		); err != nil {
+			return nil, err
+		}
+		if targetIDVal != nil {
+			cmd.TargetID = *targetIDVal
+		}
+		if targetIP != nil {
+			cmd.TargetIP = *targetIP
+		}
+		json.Unmarshal(paramsJSON, &cmd.Params)
+		commands = append(commands, cmd)
+	}
+	return commands, nil
 }
 
 // =============================================================================
@@ -2561,6 +3015,7 @@ func (s *Store) QueryMetrics(ctx context.Context, query *types.MetricsQuery) (*t
 				TargetID:      groupKey.TargetID,
 				TargetIP:      groupKey.TargetIP,
 				TargetTier:    groupKey.TargetTier,
+				TargetRegion:  groupKey.TargetRegion,
 				Points:        make([]types.MetricsDataPoint, 0),
 			}
 			seriesMap[groupKey.Key] = series
@@ -2743,25 +3198,34 @@ func buildTargetFilterCTE(filter *types.TargetFilter, startIdx int) (string, []a
 	conditions := []string{}
 	args := []any{}
 	idx := startIdx
+	needsSubnetJoin := false
 
 	// Filter by IDs
 	if len(filter.IDs) > 0 {
-		conditions = append(conditions, fmt.Sprintf("id = ANY($%d)", idx))
+		conditions = append(conditions, fmt.Sprintf("t.id = ANY($%d)", idx))
 		args = append(args, filter.IDs)
 		idx++
 	}
 
 	// Filter by tiers
 	if len(filter.Tiers) > 0 {
-		conditions = append(conditions, fmt.Sprintf("tier = ANY($%d)", idx))
+		conditions = append(conditions, fmt.Sprintf("t.tier = ANY($%d)", idx))
 		args = append(args, filter.Tiers)
 		idx++
+	}
+
+	// Filter by regions (via subnet)
+	if len(filter.Regions) > 0 {
+		conditions = append(conditions, fmt.Sprintf("s.region = ANY($%d)", idx))
+		args = append(args, filter.Regions)
+		idx++
+		needsSubnetJoin = true
 	}
 
 	// Filter by tags (all must match) - legacy simple format
 	if len(filter.Tags) > 0 {
 		tagsJSON, _ := json.Marshal(filter.Tags)
-		conditions = append(conditions, fmt.Sprintf("tags @> $%d", idx))
+		conditions = append(conditions, fmt.Sprintf("t.tags @> $%d", idx))
 		args = append(args, tagsJSON)
 		idx++
 	}
@@ -2769,7 +3233,7 @@ func buildTargetFilterCTE(filter *types.TargetFilter, startIdx int) (string, []a
 	// Exclude by tags - legacy simple format
 	if len(filter.ExcludeTags) > 0 {
 		tagsJSON, _ := json.Marshal(filter.ExcludeTags)
-		conditions = append(conditions, fmt.Sprintf("NOT tags @> $%d", idx))
+		conditions = append(conditions, fmt.Sprintf("NOT t.tags @> $%d", idx))
 		args = append(args, tagsJSON)
 		idx++
 	}
@@ -2777,7 +3241,7 @@ func buildTargetFilterCTE(filter *types.TargetFilter, startIdx int) (string, []a
 	// Advanced tag filters with operators
 	// Group filters by key (same key = OR, different keys = AND)
 	if len(filter.TagFilters) > 0 {
-		tagCondition, tagArgs, nextIdx := buildTagFiltersCondition(filter.TagFilters, idx)
+		tagCondition, tagArgs, nextIdx := buildTagFiltersConditionWithPrefix(filter.TagFilters, idx, "t.")
 		if tagCondition != "" {
 			conditions = append(conditions, tagCondition)
 			args = append(args, tagArgs...)
@@ -2789,9 +3253,113 @@ func buildTargetFilterCTE(filter *types.TargetFilter, startIdx int) (string, []a
 		return "SELECT id FROM targets LIMIT 10000", args, idx
 	}
 
-	sql := fmt.Sprintf("SELECT id FROM targets WHERE %s LIMIT 10000",
-		joinConditions(conditions, " AND "))
+	var sql string
+	if needsSubnetJoin {
+		sql = fmt.Sprintf("SELECT t.id FROM targets t LEFT JOIN subnets s ON t.subnet_id = s.id WHERE %s LIMIT 10000",
+			joinConditions(conditions, " AND "))
+	} else {
+		sql = fmt.Sprintf("SELECT t.id FROM targets t WHERE %s LIMIT 10000",
+			joinConditions(conditions, " AND "))
+	}
 	return sql, args, idx
+}
+
+// buildTagFiltersConditionWithPrefix creates SQL conditions with table prefix.
+func buildTagFiltersConditionWithPrefix(filters []types.TagFilter, startIdx int, prefix string) (string, []any, int) {
+	if len(filters) == 0 {
+		return "", nil, startIdx
+	}
+
+	args := []any{}
+	idx := startIdx
+
+	// Group filters by key
+	keyGroups := make(map[string][]types.TagFilter)
+	for _, f := range filters {
+		keyGroups[f.Key] = append(keyGroups[f.Key], f)
+	}
+
+	// Build conditions for each key group (ORed within group)
+	keyConditions := []string{}
+	for key, keyFilters := range keyGroups {
+		orConditions := []string{}
+		for _, f := range keyFilters {
+			cond, condArgs, nextIdx := buildSingleTagFilterConditionWithPrefix(key, f.Operator, f.Value, idx, prefix)
+			if cond != "" {
+				orConditions = append(orConditions, cond)
+				args = append(args, condArgs...)
+				idx = nextIdx
+			}
+		}
+		if len(orConditions) > 0 {
+			if len(orConditions) == 1 {
+				keyConditions = append(keyConditions, orConditions[0])
+			} else {
+				keyConditions = append(keyConditions, "("+joinConditions(orConditions, " OR ")+")")
+			}
+		}
+	}
+
+	if len(keyConditions) == 0 {
+		return "", nil, idx
+	}
+
+	// AND all key groups together
+	return joinConditions(keyConditions, " AND "), args, idx
+}
+
+// buildSingleTagFilterConditionWithPrefix creates a SQL condition with table prefix.
+func buildSingleTagFilterConditionWithPrefix(key, operator, value string, idx int, prefix string) (string, []any, int) {
+	args := []any{}
+
+	// Use ->> operator to extract JSON value as text
+	jsonPath := fmt.Sprintf("%stags->>'%s'", prefix, key) // Safe because key comes from our UI
+
+	switch operator {
+	case "equals", "":
+		args = append(args, value)
+		return fmt.Sprintf("%s = $%d", jsonPath, idx), args, idx + 1
+
+	case "not_equals":
+		args = append(args, value)
+		return fmt.Sprintf("(%s IS NULL OR %s != $%d)", jsonPath, jsonPath, idx), args, idx + 1
+
+	case "contains":
+		args = append(args, "%"+value+"%")
+		return fmt.Sprintf("%s ILIKE $%d", jsonPath, idx), args, idx + 1
+
+	case "not_contains":
+		args = append(args, "%"+value+"%")
+		return fmt.Sprintf("(%s IS NULL OR %s NOT ILIKE $%d)", jsonPath, jsonPath, idx), args, idx + 1
+
+	case "starts_with":
+		args = append(args, value+"%")
+		return fmt.Sprintf("%s ILIKE $%d", jsonPath, idx), args, idx + 1
+
+	case "in":
+		values := splitAndTrim(value)
+		if len(values) == 0 {
+			return "", nil, idx
+		}
+		args = append(args, values)
+		return fmt.Sprintf("%s = ANY($%d)", jsonPath, idx), args, idx + 1
+
+	case "not_in":
+		values := splitAndTrim(value)
+		if len(values) == 0 {
+			return "", nil, idx
+		}
+		args = append(args, values)
+		return fmt.Sprintf("(%s IS NULL OR NOT %s = ANY($%d))", jsonPath, jsonPath, idx), args, idx + 1
+
+	case "regex":
+		args = append(args, value)
+		return fmt.Sprintf("%s ~ $%d", jsonPath, idx), args, idx + 1
+
+	default:
+		args = append(args, value)
+		return fmt.Sprintf("%s = $%d", jsonPath, idx), args, idx + 1
+	}
 }
 
 // buildTagFiltersCondition creates SQL conditions for advanced tag filters.
@@ -2961,7 +3529,7 @@ func buildMetricsSelectClause(metrics []string, aggTable string) string {
 		case "jitter":
 			if aggTable == "probe_results" {
 				cols = append(cols, "STDDEV(pr.latency_ms) FILTER (WHERE pr.success) as jitter")
-			} else if aggTable == "probe_hourly" {
+			} else if aggTable == "probe_hourly" || aggTable == "probe_5min" {
 				cols = append(cols, "AVG(pr.latency_stddev) as jitter")
 			} else {
 				cols = append(cols, "AVG(pr.avg_jitter) as jitter")
@@ -3005,6 +3573,8 @@ func buildGroupByClause(groupBy []string) string {
 			cols = append(cols, "pr.target_id", "t.ip_address", "t.tier")
 		case "target_tier":
 			cols = append(cols, "t.tier")
+		case "target_region":
+			cols = append(cols, "pr.target_region")
 		// "time" is always included via bucket
 		}
 	}
@@ -3029,6 +3599,8 @@ func buildGroupBySelectClause(groupBy []string) string {
 			cols = append(cols, "pr.target_id", "host(t.ip_address) as target_ip", "t.tier as target_tier")
 		case "target_tier":
 			cols = append(cols, "COALESCE(t.tier, '') as target_tier")
+		case "target_region":
+			cols = append(cols, "COALESCE(pr.target_region, '') as target_region")
 		}
 	}
 	if len(cols) == 0 {
@@ -3047,6 +3619,7 @@ type metricsGroupKey struct {
 	TargetID      string
 	TargetIP      string
 	TargetTier    string
+	TargetRegion  string
 }
 
 // scanMetricsRow scans a result row into a data point and group key.
@@ -3070,6 +3643,8 @@ func (s *Store) scanMetricsRow(rows pgx.Rows, metrics []string, groupBy []string
 			dests = append(dests, &key.TargetID, &key.TargetIP, &key.TargetTier)
 		case "target_tier":
 			dests = append(dests, &key.TargetTier)
+		case "target_region":
+			dests = append(dests, &key.TargetRegion)
 		}
 	}
 
@@ -3104,9 +3679,9 @@ func (s *Store) scanMetricsRow(rows pgx.Rows, metrics []string, groupBy []string
 	}
 
 	// Build composite key for grouping
-	key.Key = fmt.Sprintf("%s|%s|%s|%s|%s|%s",
+	key.Key = fmt.Sprintf("%s|%s|%s|%s|%s|%s|%s",
 		key.AgentID, key.AgentRegion, key.AgentProvider,
-		key.TargetID, key.TargetIP, key.TargetTier)
+		key.TargetID, key.TargetIP, key.TargetTier, key.TargetRegion)
 
 	return point, key, nil
 }
