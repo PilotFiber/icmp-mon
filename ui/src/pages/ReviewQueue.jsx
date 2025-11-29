@@ -148,26 +148,28 @@ export function ReviewQueue() {
         title="Review Queue"
         description={`${targets.length} targets need review`}
         actions={
-          <Button variant="secondary" onClick={fetchData} className="gap-2">
+          <Button variant="secondary" onClick={fetchData} className="gap-2" size="sm">
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-            Refresh
+            <span className="hidden sm:inline">Refresh</span>
           </Button>
         }
       />
 
       <PageContent>
         {/* Summary Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4 mb-4 md:mb-6">
           <MetricCard
             title="Needs Review"
             value={targets.length.toLocaleString()}
             icon={AlertCircle}
             status={targets.length > 0 ? 'degraded' : 'healthy'}
+            size="sm"
           />
           <MetricCard
             title="POPs Affected"
             value={Object.keys(groupedByPop).length.toLocaleString()}
             icon={MapPin}
+            size="sm"
           />
           <MetricCard
             title="Oldest Item"
@@ -179,28 +181,30 @@ export function ReviewQueue() {
               : '—'
             }
             icon={Clock}
+            size="sm"
           />
           <MetricCard
             title="Subscribers"
             value={new Set(targets.map(t => t.subscriber_name).filter(Boolean)).size.toLocaleString()}
             icon={Building2}
+            size="sm"
           />
         </div>
 
         {/* Filters */}
-        <Card className="mb-6">
-          <div className="flex flex-wrap gap-4 items-center">
+        <Card className="mb-4 md:mb-6">
+          <div className="flex flex-col sm:flex-row sm:flex-wrap gap-2 sm:gap-3 md:gap-4 items-stretch sm:items-center">
             <SearchInput
               value={search}
               onChange={setSearch}
-              placeholder="Search IP, subscriber, network..."
-              className="w-72"
+              placeholder="Search IP, subscriber..."
+              className="w-full sm:w-56 md:w-72"
             />
             <Select
               options={pops}
               value={popFilter}
               onChange={setPopFilter}
-              className="w-40"
+              className="w-full sm:w-32 md:w-40"
             />
           </div>
         </Card>
@@ -208,33 +212,33 @@ export function ReviewQueue() {
         {/* Queue List */}
         {loading ? (
           <Card>
-            <div className="flex items-center justify-center py-12">
-              <RefreshCw className="w-6 h-6 animate-spin text-theme-muted" />
+            <div className="flex items-center justify-center py-8 md:py-12">
+              <RefreshCw className="w-5 h-5 md:w-6 md:h-6 animate-spin text-theme-muted" />
             </div>
           </Card>
         ) : filteredTargets.length === 0 ? (
           <Card>
-            <div className="text-center py-12 text-theme-muted">
-              <CheckCircle className="w-12 h-12 mx-auto mb-4 text-status-healthy opacity-50" />
-              <p className="text-lg">All clear!</p>
-              <p className="text-sm mt-1">No targets currently need review</p>
+            <div className="text-center py-8 md:py-12 text-theme-muted">
+              <CheckCircle className="w-10 h-10 md:w-12 md:h-12 mx-auto mb-3 md:mb-4 text-status-healthy opacity-50" />
+              <p className="text-base md:text-lg">All clear!</p>
+              <p className="text-xs md:text-sm mt-1">No targets currently need review</p>
             </div>
           </Card>
         ) : (
-          <div className="space-y-4">
+          <div className="space-y-3 md:space-y-4">
             {Object.entries(groupedByPop).sort((a, b) => b[1].length - a[1].length).map(([pop, popTargets]) => (
               <Card key={pop} accent="warning">
-                <div className="flex items-center justify-between mb-4">
-                  <div className="flex items-center gap-3">
-                    <MapPin className="w-5 h-5 text-accent" />
-                    <h3 className="font-semibold text-theme-primary">{pop}</h3>
-                    <span className="px-2 py-0.5 bg-accent/20 text-accent rounded text-sm font-medium">
-                      {popTargets.length} target{popTargets.length !== 1 ? 's' : ''}
+                <div className="flex items-center justify-between mb-3 md:mb-4">
+                  <div className="flex items-center gap-2 md:gap-3">
+                    <MapPin className="w-4 h-4 md:w-5 md:h-5 text-accent" />
+                    <h3 className="font-semibold text-theme-primary text-sm md:text-base">{pop}</h3>
+                    <span className="px-1.5 md:px-2 py-0.5 bg-accent/20 text-accent rounded text-xs md:text-sm font-medium">
+                      {popTargets.length}
                     </span>
                   </div>
                 </div>
 
-                <div className="space-y-3">
+                <div className="space-y-2 md:space-y-3">
                   {popTargets.map(target => {
                     const isExpanded = expandedTargets.has(target.id);
                     return (
@@ -244,25 +248,24 @@ export function ReviewQueue() {
                       >
                         {/* Header Row */}
                         <div
-                          className="flex items-center justify-between p-3 cursor-pointer hover:bg-surface-tertiary transition-colors"
+                          className="flex flex-col sm:flex-row sm:items-center sm:justify-between p-2.5 md:p-3 cursor-pointer hover:bg-surface-tertiary active:bg-surface-tertiary transition-colors gap-2 sm:gap-0"
                           onClick={() => toggleExpanded(target.id)}
                         >
-                          <div className="flex items-center gap-4">
+                          <div className="flex items-center gap-2 md:gap-4">
                             <StatusDot status="down" pulse />
-                            <div>
-                              <div className="flex items-center gap-2">
-                                <span className="font-mono font-medium text-theme-primary">{target.ip}</span>
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="font-mono font-medium text-theme-primary text-sm truncate">{target.ip}</span>
                                 <StatusBadge status="down" label="Excluded" size="sm" />
                               </div>
-                              <div className="text-xs text-theme-muted mt-0.5">
-                                {target.subscriber_name || 'Unknown subscriber'} |{' '}
-                                {target.network_address}/{target.network_size}
+                              <div className="text-[10px] md:text-xs text-theme-muted mt-0.5 truncate">
+                                {target.subscriber_name || 'Unknown'} | {target.network_address}/{target.network_size}
                               </div>
                             </div>
                           </div>
-                          <div className="flex items-center gap-4">
-                            <div className="text-right text-sm">
-                              <div className="text-theme-muted">Excluded</div>
+                          <div className="flex items-center justify-between sm:justify-end gap-2 md:gap-4 pl-5 sm:pl-0">
+                            <div className="text-right text-xs md:text-sm">
+                              <div className="text-theme-muted hidden sm:block">Excluded</div>
                               <div className="text-theme-secondary">
                                 {formatRelativeTime(target.state_changed_at)}
                               </div>
@@ -279,32 +282,32 @@ export function ReviewQueue() {
                               Review
                             </Button>
                             {isExpanded ? (
-                              <ChevronUp className="w-4 h-4 text-theme-muted" />
+                              <ChevronUp className="w-4 h-4 text-theme-muted hidden sm:block" />
                             ) : (
-                              <ChevronDown className="w-4 h-4 text-theme-muted" />
+                              <ChevronDown className="w-4 h-4 text-theme-muted hidden sm:block" />
                             )}
                           </div>
                         </div>
 
                         {/* Expanded Details */}
                         {isExpanded && (
-                          <div className="px-3 pb-3 border-t border-theme">
-                            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3">
+                          <div className="px-2.5 md:px-3 pb-2.5 md:pb-3 border-t border-theme">
+                            <div className="grid grid-cols-2 gap-2 md:gap-3 mt-2.5 md:mt-3">
                               <div>
-                                <div className="text-xs text-theme-muted">IP Type</div>
-                                <div className="text-sm text-theme-primary">{target.ip_type || 'customer'}</div>
+                                <div className="text-[10px] md:text-xs text-theme-muted">IP Type</div>
+                                <div className="text-xs md:text-sm text-theme-primary">{target.ip_type || 'customer'}</div>
                               </div>
                               <div>
-                                <div className="text-xs text-theme-muted">Ownership</div>
-                                <div className="text-sm text-theme-primary">{target.ownership || 'auto'}</div>
+                                <div className="text-[10px] md:text-xs text-theme-muted">Ownership</div>
+                                <div className="text-xs md:text-sm text-theme-primary">{target.ownership || 'auto'}</div>
                               </div>
                               <div>
-                                <div className="text-xs text-theme-muted">Gateway</div>
-                                <div className="text-sm font-mono text-theme-primary">{target.gateway_address || '—'}</div>
+                                <div className="text-[10px] md:text-xs text-theme-muted">Gateway</div>
+                                <div className="text-xs md:text-sm font-mono text-theme-primary truncate">{target.gateway_address || '—'}</div>
                               </div>
                               <div>
-                                <div className="text-xs text-theme-muted">Last Response</div>
-                                <div className="text-sm text-theme-primary">
+                                <div className="text-[10px] md:text-xs text-theme-muted">Last Response</div>
+                                <div className="text-xs md:text-sm text-theme-primary">
                                   {target.last_response_at
                                     ? formatRelativeTime(target.last_response_at)
                                     : 'Never'}
@@ -312,9 +315,9 @@ export function ReviewQueue() {
                               </div>
                             </div>
                             {target.location_address && (
-                              <div className="mt-3">
-                                <div className="text-xs text-theme-muted">Location</div>
-                                <div className="text-sm text-theme-primary">
+                              <div className="mt-2 md:mt-3">
+                                <div className="text-[10px] md:text-xs text-theme-muted">Location</div>
+                                <div className="text-xs md:text-sm text-theme-primary truncate">
                                   {target.location_address}, {target.city}
                                 </div>
                               </div>

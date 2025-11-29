@@ -25,7 +25,7 @@ import { MetricCard } from '../components/MetricCard';
 import { StatusBadge } from '../components/StatusBadge';
 import { Button } from '../components/Button';
 import { SearchInput, Select } from '../components/Input';
-import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '../components/Table';
+import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell, MobileCardList, MobileCard, MobileCardRow } from '../components/Table';
 import { EnrollAgentModal } from '../components/EnrollAgentModal';
 import { formatRelativeTime } from '../lib/utils';
 import { endpoints } from '../lib/api';
@@ -207,14 +207,14 @@ export function Agents() {
         title="Agents"
         description={`${stats.total} agents registered`}
         actions={
-          <div className="flex gap-3">
-            <Button variant="secondary" onClick={fetchAgents} className="gap-2">
+          <div className="flex gap-2 md:gap-3">
+            <Button variant="secondary" onClick={fetchAgents} className="gap-2" size="sm">
               <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-              Refresh
+              <span className="hidden sm:inline">Refresh</span>
             </Button>
-            <Button onClick={() => setShowEnrollModal(true)} className="gap-2">
+            <Button onClick={() => setShowEnrollModal(true)} className="gap-2" size="sm">
               <Plus className="w-4 h-4" />
-              Enroll Agent
+              <span className="hidden sm:inline">Enroll Agent</span>
             </Button>
           </div>
         }
@@ -222,7 +222,7 @@ export function Agents() {
 
       <PageContent>
         {/* Summary Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4 mb-4 md:mb-6">
           <MetricCard
             title="Total Agents"
             value={stats.total}
@@ -247,103 +247,104 @@ export function Agents() {
 
         {/* Fleet Overview */}
         {fleetOverview && (
-          <Card className="mb-6">
+          <Card className="mb-4 md:mb-6">
             <CardTitle icon={Activity}>Fleet Operations</CardTitle>
             <CardContent>
-              <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
-                <div className="bg-surface-primary rounded-lg p-4">
-                  <div className="flex items-center gap-2 text-theme-muted text-xs mb-1">
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 sm:gap-3 md:gap-4">
+                <div className="bg-surface-primary rounded-lg p-2.5 sm:p-3 md:p-4">
+                  <div className="flex items-center gap-1.5 sm:gap-2 text-theme-muted text-[10px] sm:text-xs mb-0.5 sm:mb-1">
                     <Target className="w-3 h-3" />
-                    Total Targets
+                    <span className="truncate">Total Targets</span>
                   </div>
-                  <div className="text-2xl font-semibold text-theme-primary">
+                  <div className="text-lg sm:text-xl md:text-2xl font-semibold text-theme-primary">
                     {fleetOverview.total_targets?.toLocaleString() || 0}
                   </div>
-                  <div className="text-xs text-theme-muted mt-1">
+                  <div className="text-[10px] sm:text-xs text-theme-muted mt-0.5 sm:mt-1 truncate">
                     {fleetOverview.total_active_targets?.toLocaleString() || 0} active
                   </div>
                 </div>
-                <div className="bg-surface-primary rounded-lg p-4">
-                  <div className="flex items-center gap-2 text-theme-muted text-xs mb-1">
+                <div className="bg-surface-primary rounded-lg p-2.5 sm:p-3 md:p-4">
+                  <div className="flex items-center gap-1.5 sm:gap-2 text-theme-muted text-[10px] sm:text-xs mb-0.5 sm:mb-1">
                     <Zap className="w-3 h-3" />
-                    Probes/sec
+                    <span className="truncate">Probes/sec</span>
                   </div>
-                  <div className="text-2xl font-semibold text-theme-primary">
+                  <div className="text-lg sm:text-xl md:text-2xl font-semibold text-theme-primary">
                     {fleetOverview.total_probes_per_second?.toFixed(1) || 0}
                   </div>
-                  <div className="text-xs text-theme-muted mt-1">
+                  <div className="text-[10px] sm:text-xs text-theme-muted mt-0.5 sm:mt-1">
                     fleet-wide
                   </div>
                 </div>
-                <div className="bg-surface-primary rounded-lg p-4">
-                  <div className="flex items-center gap-2 text-theme-muted text-xs mb-1">
+                <div className="bg-surface-primary rounded-lg p-2.5 sm:p-3 md:p-4">
+                  <div className="flex items-center gap-1.5 sm:gap-2 text-theme-muted text-[10px] sm:text-xs mb-0.5 sm:mb-1">
                     <Database className="w-3 h-3" />
-                    Results Queued
+                    <span className="truncate">Queued</span>
                   </div>
-                  <div className="text-2xl font-semibold text-theme-primary">
+                  <div className="text-lg sm:text-xl md:text-2xl font-semibold text-theme-primary">
                     {fleetOverview.total_results_queued?.toLocaleString() || 0}
                   </div>
-                  <div className="text-xs text-theme-muted mt-1">
-                    pending delivery
+                  <div className="text-[10px] sm:text-xs text-theme-muted mt-0.5 sm:mt-1 truncate">
+                    pending
                   </div>
                 </div>
-                <div className="bg-surface-primary rounded-lg p-4">
-                  <div className="flex items-center gap-2 text-theme-muted text-xs mb-1">
+                <div className="bg-surface-primary rounded-lg p-2.5 sm:p-3 md:p-4">
+                  <div className="flex items-center gap-1.5 sm:gap-2 text-theme-muted text-[10px] sm:text-xs mb-0.5 sm:mb-1">
                     <Cpu className="w-3 h-3" />
-                    Avg CPU
+                    <span className="truncate">Avg CPU</span>
                   </div>
-                  <div className="text-2xl font-semibold text-theme-primary">
+                  <div className="text-lg sm:text-xl md:text-2xl font-semibold text-theme-primary">
                     {fleetOverview.avg_cpu_percent?.toFixed(1) || 0}%
                   </div>
-                  <div className="text-xs text-theme-muted mt-1">
+                  <div className="text-[10px] sm:text-xs text-theme-muted mt-0.5 sm:mt-1 truncate">
                     across agents
                   </div>
                 </div>
-                <div className="bg-surface-primary rounded-lg p-4">
-                  <div className="flex items-center gap-2 text-theme-muted text-xs mb-1">
+                <div className="bg-surface-primary rounded-lg p-2.5 sm:p-3 md:p-4">
+                  <div className="flex items-center gap-1.5 sm:gap-2 text-theme-muted text-[10px] sm:text-xs mb-0.5 sm:mb-1">
                     <HardDrive className="w-3 h-3" />
-                    Avg Memory
+                    <span className="truncate">Avg Memory</span>
                   </div>
-                  <div className="text-2xl font-semibold text-theme-primary">
-                    {fleetOverview.avg_memory_mb?.toFixed(1) || 0} MB
+                  <div className="text-lg sm:text-xl md:text-2xl font-semibold text-theme-primary">
+                    {fleetOverview.avg_memory_mb?.toFixed(0) || 0}<span className="text-sm sm:text-base">MB</span>
                   </div>
-                  <div className="text-xs text-theme-muted mt-1">
+                  <div className="text-[10px] sm:text-xs text-theme-muted mt-0.5 sm:mt-1">
                     per agent
                   </div>
                 </div>
-                <div className="bg-surface-primary rounded-lg p-4">
-                  <div className="flex items-center gap-2 text-theme-muted text-xs mb-1">
+                <div className="bg-surface-primary rounded-lg p-2.5 sm:p-3 md:p-4">
+                  <div className="flex items-center gap-1.5 sm:gap-2 text-theme-muted text-[10px] sm:text-xs mb-0.5 sm:mb-1">
                     <Server className="w-3 h-3" />
-                    Active Agents
+                    <span className="truncate">Active</span>
                   </div>
-                  <div className="text-2xl font-semibold text-pilot-cyan">
+                  <div className="text-lg sm:text-xl md:text-2xl font-semibold text-pilot-cyan">
                     {fleetOverview.active_agents || 0}
                   </div>
-                  <div className="text-xs text-theme-muted mt-1">
+                  <div className="text-[10px] sm:text-xs text-theme-muted mt-0.5 sm:mt-1 truncate">
                     of {fleetOverview.total_agents || 0} total
                   </div>
                 </div>
               </div>
 
               {/* Rebalance Button */}
-              <div className="mt-4 pt-4 border-t border-border-subtle flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <Shuffle className="w-4 h-4 text-theme-muted" />
-                  <div>
+              <div className="mt-3 sm:mt-4 pt-3 sm:pt-4 border-t border-border-subtle flex flex-col sm:flex-row sm:items-center gap-3 sm:justify-between">
+                <div className="flex items-center gap-2 sm:gap-3">
+                  <Shuffle className="w-4 h-4 text-theme-muted flex-shrink-0" />
+                  <div className="min-w-0">
                     <div className="text-sm text-theme-primary font-medium">Target Assignment</div>
-                    <div className="text-xs text-theme-muted">
+                    <div className="text-xs text-theme-muted truncate">
                       {rebalanceStatus?.last_completed ? (
                         <>
-                          Last rebalanced: {new Date(rebalanceStatus.last_completed).toLocaleString()}
+                          <span className="hidden sm:inline">Last rebalanced: </span>
+                          {new Date(rebalanceStatus.last_completed).toLocaleString()}
                           {rebalanceStatus.last_assignments > 0 && (
-                            <> ({rebalanceStatus.last_assignments.toLocaleString()} assignments)</>
+                            <span className="hidden md:inline"> ({rebalanceStatus.last_assignments.toLocaleString()} assignments)</span>
                           )}
                           {rebalanceStatus.last_error && (
-                            <span className="text-pilot-red ml-2">Error: {rebalanceStatus.last_error}</span>
+                            <span className="text-pilot-red ml-2">Error</span>
                           )}
                         </>
                       ) : (
-                        'Distribute targets across all active agents'
+                        'Distribute targets across agents'
                       )}
                     </div>
                   </div>
@@ -353,17 +354,19 @@ export function Agents() {
                   size="sm"
                   onClick={handleRebalance}
                   disabled={isRebalancing}
-                  className="gap-2"
+                  className="gap-2 w-full sm:w-auto"
                 >
                   {isRebalancing ? (
                     <>
                       <Loader2 className="w-4 h-4 animate-spin" />
-                      Rebalancing...
+                      <span className="sm:hidden">Rebalancing</span>
+                      <span className="hidden sm:inline">Rebalancing...</span>
                     </>
                   ) : (
                     <>
                       <Shuffle className="w-4 h-4" />
-                      Rebalance Targets
+                      <span className="sm:hidden">Rebalance</span>
+                      <span className="hidden sm:inline">Rebalance Targets</span>
                     </>
                   )}
                 </Button>
@@ -373,118 +376,173 @@ export function Agents() {
         )}
 
         {/* Filters */}
-        <Card className="mb-6">
-          <div className="flex flex-wrap gap-4">
+        <Card className="mb-4 md:mb-6">
+          <div className="flex flex-col sm:flex-row sm:flex-wrap gap-2 sm:gap-3 md:gap-4">
             <SearchInput
               value={search}
               onChange={setSearch}
               placeholder="Search agents..."
-              className="w-64"
+              className="w-full sm:w-64"
             />
-            <Select
-              options={regionOptions}
-              value={regionFilter}
-              onChange={setRegionFilter}
-              className="w-40"
-            />
-            <Select
-              options={providerOptions}
-              value={providerFilter}
-              onChange={setProviderFilter}
-              className="w-40"
-            />
-            <Select
-              options={statuses}
-              value={statusFilter}
-              onChange={setStatusFilter}
-              className="w-40"
-            />
+            <div className="grid grid-cols-3 sm:flex gap-2 sm:gap-3 md:gap-4">
+              <Select
+                options={regionOptions}
+                value={regionFilter}
+                onChange={setRegionFilter}
+                className="w-full sm:w-32 md:w-40"
+              />
+              <Select
+                options={providerOptions}
+                value={providerFilter}
+                onChange={setProviderFilter}
+                className="w-full sm:w-32 md:w-40"
+              />
+              <Select
+                options={statuses}
+                value={statusFilter}
+                onChange={setStatusFilter}
+                className="w-full sm:w-32 md:w-40"
+              />
+            </div>
           </div>
         </Card>
 
         {/* Agent List */}
         <Card>
           {filteredAgents.length === 0 ? (
-            <div className="text-center py-12 text-theme-muted">
-              <Server className="w-12 h-12 mx-auto mb-4 opacity-50" />
+            <div className="text-center py-8 md:py-12 text-theme-muted">
+              <Server className="w-10 h-10 md:w-12 md:h-12 mx-auto mb-3 md:mb-4 opacity-50" />
               {agents.length === 0 ? (
                 <>
-                  <p>No agents registered</p>
-                  <p className="text-sm mt-1">Start an agent to begin monitoring</p>
+                  <p className="text-sm md:text-base">No agents registered</p>
+                  <p className="text-xs md:text-sm mt-1">Start an agent to begin monitoring</p>
                 </>
               ) : (
-                <p>No agents match your filters</p>
+                <p className="text-sm md:text-base">No agents match your filters</p>
               )}
             </div>
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Agent</TableHead>
-                  <TableHead>Region / Location</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Version</TableHead>
-                  <TableHead>Public IP</TableHead>
-                  <TableHead>Last Heartbeat</TableHead>
-                  <TableHead></TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {filteredAgents.map((agent) => (
-                  <TableRow
-                    key={agent.id}
-                    onClick={() => navigate(`/agents/${agent.id}`)}
-                    className="cursor-pointer"
-                  >
-                    <TableCell>
-                      <div className="flex items-center gap-3">
-                        <div className="p-2 bg-surface-tertiary rounded-lg">
-                          <Server className="w-4 h-4 text-pilot-cyan" />
+            <>
+              {/* Mobile Card View */}
+              <MobileCardList>
+                {filteredAgents.map((agent) => {
+                  const effectiveStatus = getEffectiveStatus(agent);
+                  return (
+                    <MobileCard
+                      key={agent.id}
+                      onClick={() => navigate(`/agents/${agent.id}`)}
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <div className="p-1.5 bg-surface-tertiary rounded-lg flex-shrink-0">
+                            <Server className="w-4 h-4 text-pilot-cyan" />
+                          </div>
+                          <div className="min-w-0">
+                            <div className="font-medium text-theme-primary text-sm truncate">{agent.name}</div>
+                            <div className="text-xs text-theme-muted">{agent.provider}</div>
+                          </div>
                         </div>
-                        <div>
-                          <div className="font-medium text-theme-primary">{agent.name}</div>
-                          <div className="text-xs text-theme-muted">{agent.provider}</div>
-                        </div>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex items-center gap-2">
-                        <MapPin className="w-4 h-4 text-theme-muted" />
-                        <div>
-                          <div className="text-sm text-theme-primary">{agent.region || 'Unknown'}</div>
-                          <div className="text-xs text-theme-muted">{agent.location || ''}</div>
-                        </div>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      {(() => {
-                        const effectiveStatus = getEffectiveStatus(agent);
-                        return (
+                        <div className="flex items-center gap-2 flex-shrink-0">
                           <StatusBadge
                             status={effectiveStatus === 'active' ? 'healthy' : effectiveStatus === 'degraded' ? 'degraded' : effectiveStatus === 'archived' ? 'unknown' : 'down'}
                             label={effectiveStatus}
                             pulse={effectiveStatus === 'offline'}
                             size="sm"
                           />
-                        );
-                      })()}
-                    </TableCell>
-                    <TableCell className="text-theme-muted">
-                      {agent.version || 'unknown'}
-                    </TableCell>
-                    <TableCell className="font-mono text-sm text-theme-muted">
-                      {agent.public_ip || '—'}
-                    </TableCell>
-                    <TableCell className="text-theme-muted text-sm">
-                      {agent.last_heartbeat ? formatRelativeTime(agent.last_heartbeat) : 'Never'}
-                    </TableCell>
-                    <TableCell>
-                      <ChevronRight className="w-4 h-4 text-theme-muted" />
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+                          <ChevronRight className="w-4 h-4 text-theme-muted" />
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2 pt-2 border-t border-border-subtle text-xs">
+                        <div>
+                          <span className="text-theme-muted">Region:</span>{' '}
+                          <span className="text-theme-primary">{agent.region || 'Unknown'}</span>
+                        </div>
+                        <div>
+                          <span className="text-theme-muted">Version:</span>{' '}
+                          <span className="text-theme-primary">{agent.version || 'unknown'}</span>
+                        </div>
+                        <div className="col-span-2">
+                          <span className="text-theme-muted">Last seen:</span>{' '}
+                          <span className="text-theme-primary">{agent.last_heartbeat ? formatRelativeTime(agent.last_heartbeat) : 'Never'}</span>
+                        </div>
+                      </div>
+                    </MobileCard>
+                  );
+                })}
+              </MobileCardList>
+
+              {/* Desktop Table View */}
+              <div className="hidden md:block">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Agent</TableHead>
+                      <TableHead>Region / Location</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Version</TableHead>
+                      <TableHead>Public IP</TableHead>
+                      <TableHead>Last Heartbeat</TableHead>
+                      <TableHead></TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {filteredAgents.map((agent) => (
+                      <TableRow
+                        key={agent.id}
+                        onClick={() => navigate(`/agents/${agent.id}`)}
+                        className="cursor-pointer"
+                      >
+                        <TableCell>
+                          <div className="flex items-center gap-3">
+                            <div className="p-2 bg-surface-tertiary rounded-lg">
+                              <Server className="w-4 h-4 text-pilot-cyan" />
+                            </div>
+                            <div>
+                              <div className="font-medium text-theme-primary">{agent.name}</div>
+                              <div className="text-xs text-theme-muted">{agent.provider}</div>
+                            </div>
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-2">
+                            <MapPin className="w-4 h-4 text-theme-muted" />
+                            <div>
+                              <div className="text-sm text-theme-primary">{agent.region || 'Unknown'}</div>
+                              <div className="text-xs text-theme-muted">{agent.location || ''}</div>
+                            </div>
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          {(() => {
+                            const effectiveStatus = getEffectiveStatus(agent);
+                            return (
+                              <StatusBadge
+                                status={effectiveStatus === 'active' ? 'healthy' : effectiveStatus === 'degraded' ? 'degraded' : effectiveStatus === 'archived' ? 'unknown' : 'down'}
+                                label={effectiveStatus}
+                                pulse={effectiveStatus === 'offline'}
+                                size="sm"
+                              />
+                            );
+                          })()}
+                        </TableCell>
+                        <TableCell className="text-theme-muted">
+                          {agent.version || 'unknown'}
+                        </TableCell>
+                        <TableCell className="font-mono text-sm text-theme-muted">
+                          {agent.public_ip || '—'}
+                        </TableCell>
+                        <TableCell className="text-theme-muted text-sm">
+                          {agent.last_heartbeat ? formatRelativeTime(agent.last_heartbeat) : 'Never'}
+                        </TableCell>
+                        <TableCell>
+                          <ChevronRight className="w-4 h-4 text-theme-muted" />
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </>
           )}
         </Card>
 

@@ -282,7 +282,7 @@ export function Dashboard() {
         )}
 
         {/* Top Metrics */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4 mb-6">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 md:gap-4 mb-4 md:mb-6">
           <MetricCard
             title="Active Agents"
             value={`${activeAgents}/${totalAgents}`}
@@ -334,7 +334,7 @@ export function Dashboard() {
         </div>
 
         {/* Status Overview */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 md:gap-6 mb-4 md:mb-6">
           {/* Agents by Provider Card */}
           <Card className="lg:col-span-1">
             <div className="flex items-center justify-between mb-4">
@@ -410,7 +410,7 @@ export function Dashboard() {
                 </span>
               </div>
             </div>
-            <CardContent className="mt-4 h-64">
+            <CardContent className="mt-4 h-48 sm:h-56 md:h-64">
               <ResponsiveContainer width="100%" height="100%">
                 <AreaChart data={inMarketLatency.history.length > 0 ? inMarketLatency.history : latencyHistory}>
                   <defs>
@@ -483,7 +483,7 @@ export function Dashboard() {
         </div>
 
         {/* Region Coverage & Tier Breakdown */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 md:gap-6 mb-4 md:mb-6">
           {/* Region Coverage */}
           <Card>
             <CardTitle>Agent Coverage by Region</CardTitle>
@@ -573,7 +573,7 @@ export function Dashboard() {
         </div>
 
         {/* Recent Incidents & Targets */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 md:gap-6">
           {/* Recent Incidents */}
           <Card>
             <div className="flex items-center justify-between mb-4">

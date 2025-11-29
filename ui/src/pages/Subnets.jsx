@@ -19,7 +19,7 @@ import { MetricCard } from '../components/MetricCard';
 import { StatusBadge } from '../components/StatusBadge';
 import { Button } from '../components/Button';
 import { SearchInput, Select } from '../components/Input';
-import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '../components/Table';
+import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell, MobileCardList, MobileCard } from '../components/Table';
 import { Modal, ModalFooter } from '../components/Modal';
 import { endpoints } from '../lib/api';
 
@@ -215,13 +215,13 @@ function Pagination({ currentPage, totalPages, totalCount, pageSize, onPageChang
   const endItem = Math.min(currentPage * pageSize, totalCount);
 
   return (
-    <div className="flex items-center justify-between px-4 py-3 border-t border-theme">
-      <div className="text-sm text-theme-muted">
-        Showing <span className="font-medium text-theme-secondary">{startItem.toLocaleString()}</span> to{' '}
+    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between px-3 sm:px-4 py-3 border-t border-theme gap-3">
+      <div className="text-xs sm:text-sm text-theme-muted text-center sm:text-left">
+        <span className="font-medium text-theme-secondary">{startItem.toLocaleString()}</span>-
         <span className="font-medium text-theme-secondary">{endItem.toLocaleString()}</span> of{' '}
-        <span className="font-medium text-theme-secondary">{totalCount.toLocaleString()}</span> results
+        <span className="font-medium text-theme-secondary">{totalCount.toLocaleString()}</span>
       </div>
-      <div className="flex items-center gap-2">
+      <div className="flex items-center justify-center gap-2">
         <Button
           variant="secondary"
           size="sm"
@@ -230,10 +230,10 @@ function Pagination({ currentPage, totalPages, totalCount, pageSize, onPageChang
           className="gap-1"
         >
           <ChevronLeft className="w-4 h-4" />
-          Previous
+          <span className="hidden sm:inline">Previous</span>
         </Button>
-        <span className="text-sm text-theme-secondary px-3">
-          Page {currentPage} of {totalPages}
+        <span className="text-xs sm:text-sm text-theme-secondary px-2 sm:px-3">
+          {currentPage}/{totalPages}
         </span>
         <Button
           variant="secondary"
@@ -242,7 +242,7 @@ function Pagination({ currentPage, totalPages, totalCount, pageSize, onPageChang
           disabled={currentPage >= totalPages}
           className="gap-1"
         >
-          Next
+          <span className="hidden sm:inline">Next</span>
           <ChevronRight className="w-4 h-4" />
         </Button>
       </div>
@@ -386,14 +386,14 @@ export function Subnets() {
         title="Subnets"
         description={`${totalCount.toLocaleString()} subnets`}
         actions={
-          <div className="flex gap-3">
-            <Button variant="secondary" onClick={fetchData} className="gap-2">
+          <div className="flex gap-2 md:gap-3">
+            <Button variant="secondary" onClick={fetchData} className="gap-2" size="sm">
               <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-              Refresh
+              <span className="hidden sm:inline">Refresh</span>
             </Button>
-            <Button onClick={() => setShowCreateModal(true)} className="gap-2">
+            <Button onClick={() => setShowCreateModal(true)} className="gap-2" size="sm">
               <Plus className="w-4 h-4" />
-              Create Subnet
+              <span className="hidden sm:inline">Create Subnet</span>
             </Button>
           </div>
         }
@@ -401,174 +401,236 @@ export function Subnets() {
 
       <PageContent>
         {/* Summary Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4 mb-4 md:mb-6">
           <MetricCard
             title="Total Subnets"
             value={totalCount.toLocaleString()}
             icon={Network}
+            size="sm"
           />
           <MetricCard
             title="Current Page"
             value={`${currentPage} / ${totalPages || 1}`}
             icon={MapPin}
+            size="sm"
           />
           <MetricCard
             title="Per Page"
             value={PAGE_SIZE.toString()}
             icon={Building2}
+            size="sm"
           />
           <MetricCard
             title="Showing"
             value={subnets.length.toString()}
             icon={Archive}
+            size="sm"
           />
         </div>
 
         {/* Filters */}
-        <Card className="mb-6">
-          <div className="flex flex-wrap gap-4 items-center">
+        <Card className="mb-4 md:mb-6">
+          <div className="flex flex-col sm:flex-row sm:flex-wrap gap-2 sm:gap-3 md:gap-4 items-stretch sm:items-center">
             <SearchInput
               value={searchInput}
               onChange={setSearchInput}
-              placeholder="Search subnet, subscriber, location..."
-              className="w-72"
+              placeholder="Search subnet, subscriber..."
+              className="w-full sm:w-64 md:w-72"
             />
-            <input
-              type="text"
-              value={popFilter}
-              onChange={(e) => handlePopChange(e.target.value)}
-              placeholder="Filter by POP"
-              className="px-3 py-2 bg-surface-primary border border-theme rounded-lg text-theme-primary placeholder-theme-muted focus:outline-none focus:ring-2 focus:ring-pilot-cyan w-40 text-sm"
-            />
-            <select
-              value={serviceStatusFilter}
-              onChange={(e) => handleServiceStatusChange(e.target.value)}
-              className="px-3 py-2 bg-surface-primary border border-theme rounded-lg text-theme-primary focus:outline-none focus:ring-2 focus:ring-pilot-cyan text-sm"
-            >
-              <option value="">All Service Status</option>
-              <option value="active">Active Services</option>
-              <option value="cancelled">Cancelled Services</option>
-            </select>
-            <label className="flex items-center gap-2 text-sm text-theme-secondary cursor-pointer">
+            <div className="grid grid-cols-2 sm:flex gap-2 sm:gap-3 md:gap-4">
               <input
-                type="checkbox"
-                checked={includeArchived}
-                onChange={handleArchivedToggle}
-                className="rounded border-theme bg-surface-primary text-pilot-cyan focus:ring-pilot-cyan"
+                type="text"
+                value={popFilter}
+                onChange={(e) => handlePopChange(e.target.value)}
+                placeholder="POP"
+                className="px-3 py-2 bg-surface-primary border border-theme rounded-lg text-theme-primary placeholder-theme-muted focus:outline-none focus:ring-2 focus:ring-pilot-cyan w-full sm:w-28 md:w-40 text-sm"
               />
-              Include archived
-            </label>
-            {(search || popFilter || serviceStatusFilter || includeArchived) && (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => {
-                  setSearchInput('');
-                  setSearch('');
-                  setPopFilter('');
-                  setServiceStatusFilter('');
-                  setIncludeArchived(false);
-                  setCurrentPage(1);
-                }}
-                className="text-theme-muted hover:text-theme-primary"
+              <select
+                value={serviceStatusFilter}
+                onChange={(e) => handleServiceStatusChange(e.target.value)}
+                className="px-3 py-2 bg-surface-primary border border-theme rounded-lg text-theme-primary focus:outline-none focus:ring-2 focus:ring-pilot-cyan text-sm w-full sm:w-auto"
               >
-                Clear filters
-              </Button>
-            )}
+                <option value="">All Status</option>
+                <option value="active">Active</option>
+                <option value="cancelled">Cancelled</option>
+              </select>
+            </div>
+            <div className="flex items-center justify-between sm:justify-start gap-2 sm:gap-4">
+              <label className="flex items-center gap-2 text-xs sm:text-sm text-theme-secondary cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={includeArchived}
+                  onChange={handleArchivedToggle}
+                  className="rounded border-theme bg-surface-primary text-pilot-cyan focus:ring-pilot-cyan"
+                />
+                <span className="hidden sm:inline">Include archived</span>
+                <span className="sm:hidden">Archived</span>
+              </label>
+              {(search || popFilter || serviceStatusFilter || includeArchived) && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    setSearchInput('');
+                    setSearch('');
+                    setPopFilter('');
+                    setServiceStatusFilter('');
+                    setIncludeArchived(false);
+                    setCurrentPage(1);
+                  }}
+                  className="text-theme-muted hover:text-theme-primary text-xs sm:text-sm"
+                >
+                  Clear
+                </Button>
+              )}
+            </div>
           </div>
         </Card>
 
         {/* Subnet List */}
         <Card className="overflow-hidden">
           {loading && subnets.length === 0 ? (
-            <div className="text-center py-12 text-theme-muted">
-              <RefreshCw className="w-8 h-8 mx-auto mb-4 animate-spin" />
-              <p>Loading subnets...</p>
+            <div className="text-center py-8 md:py-12 text-theme-muted">
+              <RefreshCw className="w-6 h-6 md:w-8 md:h-8 mx-auto mb-3 md:mb-4 animate-spin" />
+              <p className="text-sm md:text-base">Loading subnets...</p>
             </div>
           ) : subnets.length === 0 ? (
-            <div className="text-center py-12 text-theme-muted">
-              <Network className="w-12 h-12 mx-auto mb-4 opacity-50" />
+            <div className="text-center py-8 md:py-12 text-theme-muted">
+              <Network className="w-10 h-10 md:w-12 md:h-12 mx-auto mb-3 md:mb-4 opacity-50" />
               {totalCount === 0 && !search && !popFilter ? (
                 <>
-                  <p>No subnets configured</p>
-                  <p className="text-sm mt-1">Subnets will appear here after syncing with Pilot</p>
+                  <p className="text-sm md:text-base">No subnets configured</p>
+                  <p className="text-xs md:text-sm mt-1">Subnets will appear here after syncing</p>
                 </>
               ) : (
-                <p>No subnets match your filters</p>
+                <p className="text-sm md:text-base">No subnets match your filters</p>
               )}
             </div>
           ) : (
             <>
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Network</TableHead>
-                    <TableHead>Subscriber</TableHead>
-                    <TableHead>POP</TableHead>
-                    <TableHead>Gateway</TableHead>
-                    <TableHead>Location</TableHead>
-                    <TableHead>State</TableHead>
-                    <TableHead></TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {subnets.map((subnet) => (
-                    <TableRow
-                      key={subnet.id}
-                      onClick={() => navigate(`/subnets/${subnet.id}`)}
-                      className={`cursor-pointer ${subnet.archived_at ? 'opacity-60' : ''}`}
-                    >
-                      <TableCell>
-                        <div className="flex items-center gap-2">
-                          <Network className="w-4 h-4 text-pilot-cyan" />
-                          <span className="font-mono text-theme-primary">
-                            {formatSubnetCIDR(subnet)}
-                          </span>
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <div>
-                          <div className="text-theme-primary">{subnet.subscriber_name || '—'}</div>
-                          {subnet.service_id && (
-                            <div className="text-xs text-theme-muted">Service ID: {subnet.service_id}</div>
-                          )}
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <span className="px-2 py-0.5 bg-pilot-cyan/20 text-pilot-cyan rounded text-xs font-medium">
+              {/* Mobile Card View */}
+              <MobileCardList>
+                {subnets.map((subnet) => (
+                  <MobileCard
+                    key={subnet.id}
+                    onClick={() => navigate(`/subnets/${subnet.id}`)}
+                    className={subnet.archived_at ? 'opacity-60' : ''}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <Network className="w-4 h-4 text-pilot-cyan flex-shrink-0" />
+                        <span className="font-mono text-theme-primary text-sm truncate">
+                          {formatSubnetCIDR(subnet)}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2 flex-shrink-0">
+                        <span className="px-1.5 py-0.5 bg-pilot-cyan/20 text-pilot-cyan rounded text-[10px] font-medium">
                           {subnet.pop_name || '—'}
                         </span>
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex items-center gap-2">
-                          <Server className="w-3 h-3 text-theme-muted" />
-                          <span className="font-mono text-sm text-theme-secondary">
-                            {subnet.gateway_address || '—'}
-                          </span>
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <div className="text-sm">
-                          <div className="text-theme-primary">{subnet.city || '—'}</div>
-                          <div className="text-xs text-theme-muted">{subnet.region}</div>
-                        </div>
-                      </TableCell>
-                      <TableCell>
+                        <ChevronRight className="w-4 h-4 text-theme-muted" />
+                      </div>
+                    </div>
+                    <div className="pt-2 border-t border-border-subtle text-xs space-y-1.5">
+                      <div className="flex justify-between">
+                        <span className="text-theme-muted">Subscriber</span>
+                        <span className="text-theme-primary truncate ml-2">{subnet.subscriber_name || '—'}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-theme-muted">Gateway</span>
+                        <span className="font-mono text-theme-secondary">{subnet.gateway_address || '—'}</span>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <span className="text-theme-muted">Location</span>
+                        <span className="text-theme-primary">{subnet.city || '—'}{subnet.region ? `, ${subnet.region}` : ''}</span>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <span className="text-theme-muted">Status</span>
                         {subnet.archived_at ? (
                           <StatusBadge status="down" label="Archived" size="sm" />
                         ) : subnet.service_status === 'cancelled' ? (
-                          <StatusBadge status="down" label="Service Cancelled" size="sm" />
+                          <StatusBadge status="down" label="Cancelled" size="sm" />
                         ) : (
                           <StatusBadge status="healthy" label="Active" size="sm" />
                         )}
-                      </TableCell>
-                      <TableCell>
-                        <ChevronRight className="w-4 h-4 text-theme-muted" />
-                      </TableCell>
+                      </div>
+                    </div>
+                  </MobileCard>
+                ))}
+              </MobileCardList>
+
+              {/* Desktop Table View */}
+              <div className="hidden md:block">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Network</TableHead>
+                      <TableHead>Subscriber</TableHead>
+                      <TableHead>POP</TableHead>
+                      <TableHead>Gateway</TableHead>
+                      <TableHead>Location</TableHead>
+                      <TableHead>State</TableHead>
+                      <TableHead></TableHead>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+                  </TableHeader>
+                  <TableBody>
+                    {subnets.map((subnet) => (
+                      <TableRow
+                        key={subnet.id}
+                        onClick={() => navigate(`/subnets/${subnet.id}`)}
+                        className={`cursor-pointer ${subnet.archived_at ? 'opacity-60' : ''}`}
+                      >
+                        <TableCell>
+                          <div className="flex items-center gap-2">
+                            <Network className="w-4 h-4 text-pilot-cyan" />
+                            <span className="font-mono text-theme-primary">
+                              {formatSubnetCIDR(subnet)}
+                            </span>
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <div>
+                            <div className="text-theme-primary">{subnet.subscriber_name || '—'}</div>
+                            {subnet.service_id && (
+                              <div className="text-xs text-theme-muted">Service ID: {subnet.service_id}</div>
+                            )}
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <span className="px-2 py-0.5 bg-pilot-cyan/20 text-pilot-cyan rounded text-xs font-medium">
+                            {subnet.pop_name || '—'}
+                          </span>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-2">
+                            <Server className="w-3 h-3 text-theme-muted" />
+                            <span className="font-mono text-sm text-theme-secondary">
+                              {subnet.gateway_address || '—'}
+                            </span>
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <div className="text-sm">
+                            <div className="text-theme-primary">{subnet.city || '—'}</div>
+                            <div className="text-xs text-theme-muted">{subnet.region}</div>
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          {subnet.archived_at ? (
+                            <StatusBadge status="down" label="Archived" size="sm" />
+                          ) : subnet.service_status === 'cancelled' ? (
+                            <StatusBadge status="down" label="Service Cancelled" size="sm" />
+                          ) : (
+                            <StatusBadge status="healthy" label="Active" size="sm" />
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          <ChevronRight className="w-4 h-4 text-theme-muted" />
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
 
               {/* Pagination */}
               {totalPages > 1 && (

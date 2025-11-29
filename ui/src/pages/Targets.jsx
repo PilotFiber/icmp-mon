@@ -16,7 +16,7 @@ import { MetricCard } from '../components/MetricCard';
 import { StatusBadge, StatusDot } from '../components/StatusBadge';
 import { Button } from '../components/Button';
 import { SearchInput, Select } from '../components/Input';
-import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '../components/Table';
+import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell, MobileCardList, MobileCard } from '../components/Table';
 import { Modal, ModalFooter } from '../components/Modal';
 import { formatRelativeTime } from '../lib/utils';
 import { endpoints } from '../lib/api';
@@ -178,13 +178,13 @@ function Pagination({ currentPage, totalPages, totalCount, pageSize, onPageChang
   const endItem = Math.min(currentPage * pageSize, totalCount);
 
   return (
-    <div className="flex items-center justify-between px-4 py-3 border-t border-theme">
-      <div className="text-sm text-theme-muted">
-        Showing <span className="font-medium text-theme-secondary">{startItem.toLocaleString()}</span> to{' '}
+    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between px-3 sm:px-4 py-3 border-t border-theme gap-3">
+      <div className="text-xs sm:text-sm text-theme-muted text-center sm:text-left">
+        <span className="font-medium text-theme-secondary">{startItem.toLocaleString()}</span>-
         <span className="font-medium text-theme-secondary">{endItem.toLocaleString()}</span> of{' '}
-        <span className="font-medium text-theme-secondary">{totalCount.toLocaleString()}</span> results
+        <span className="font-medium text-theme-secondary">{totalCount.toLocaleString()}</span>
       </div>
-      <div className="flex items-center gap-2">
+      <div className="flex items-center justify-center gap-2">
         <Button
           variant="secondary"
           size="sm"
@@ -193,10 +193,10 @@ function Pagination({ currentPage, totalPages, totalCount, pageSize, onPageChang
           className="gap-1"
         >
           <ChevronLeft className="w-4 h-4" />
-          Previous
+          <span className="hidden sm:inline">Previous</span>
         </Button>
-        <span className="text-sm text-theme-secondary px-3">
-          Page {currentPage} of {totalPages}
+        <span className="text-xs sm:text-sm text-theme-secondary px-2 sm:px-3">
+          {currentPage}/{totalPages}
         </span>
         <Button
           variant="secondary"
@@ -205,7 +205,7 @@ function Pagination({ currentPage, totalPages, totalCount, pageSize, onPageChang
           disabled={currentPage >= totalPages}
           className="gap-1"
         >
-          Next
+          <span className="hidden sm:inline">Next</span>
           <ChevronRight className="w-4 h-4" />
         </Button>
       </div>
@@ -380,14 +380,14 @@ export function Targets() {
         title="Targets"
         description={`${totalCount.toLocaleString()} monitored targets`}
         actions={
-          <div className="flex gap-3">
-            <Button variant="secondary" onClick={fetchData} className="gap-2">
+          <div className="flex gap-2 md:gap-3">
+            <Button variant="secondary" onClick={fetchData} className="gap-2" size="sm">
               <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-              Refresh
+              <span className="hidden sm:inline">Refresh</span>
             </Button>
-            <Button className="gap-2" onClick={() => setShowTargetModal(true)}>
+            <Button className="gap-2" onClick={() => setShowTargetModal(true)} size="sm">
               <Plus className="w-4 h-4" />
-              Add Target
+              <span className="hidden sm:inline">Add Target</span>
             </Button>
           </div>
         }
@@ -395,24 +395,26 @@ export function Targets() {
 
       <PageContent>
         {/* Summary Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
-          <MetricCard title="Total Targets" value={totalCount.toLocaleString()} icon={Target} />
-          <MetricCard title="Current Page" value={`${currentPage} / ${totalPages || 1}`} />
-          <MetricCard title="Per Page" value={PAGE_SIZE.toString()} />
-          <MetricCard title="Showing" value={targetsWithStatus.length.toString()} />
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4 mb-4 md:mb-6">
+          <MetricCard title="Total Targets" value={totalCount.toLocaleString()} icon={Target} size="sm" />
+          <MetricCard title="Current Page" value={`${currentPage} / ${totalPages || 1}`} size="sm" />
+          <MetricCard title="Per Page" value={PAGE_SIZE.toString()} size="sm" />
+          <MetricCard title="Showing" value={targetsWithStatus.length.toString()} size="sm" />
         </div>
 
         {/* Filters */}
-        <Card className="mb-6">
-          <div className="flex flex-wrap gap-4 items-center">
+        <Card className="mb-4 md:mb-6">
+          <div className="flex flex-col sm:flex-row sm:flex-wrap gap-2 sm:gap-3 md:gap-4 items-stretch sm:items-center">
             <SearchInput
               value={searchInput}
               onChange={setSearchInput}
-              placeholder="Search IP, name, or description..."
-              className="w-72"
+              placeholder="Search IP, name..."
+              className="w-full sm:w-64 md:w-72"
             />
-            <Select options={tierOptions} value={tierFilter} onChange={handleTierChange} className="w-40" />
-            <Select options={monitoringStates} value={stateFilter} onChange={handleStateChange} className="w-48" />
+            <div className="grid grid-cols-2 sm:flex gap-2 sm:gap-3 md:gap-4">
+              <Select options={tierOptions} value={tierFilter} onChange={handleTierChange} className="w-full sm:w-32 md:w-40" />
+              <Select options={monitoringStates} value={stateFilter} onChange={handleStateChange} className="w-full sm:w-36 md:w-48" />
+            </div>
             {(search || tierFilter || stateFilter) && (
               <Button
                 variant="ghost"
@@ -424,7 +426,7 @@ export function Targets() {
                   setStateFilter('');
                   setCurrentPage(1);
                 }}
-                className="text-theme-muted hover:text-theme-primary"
+                className="text-theme-muted hover:text-theme-primary text-xs sm:text-sm"
               >
                 Clear filters
               </Button>
@@ -435,96 +437,155 @@ export function Targets() {
         {/* Target List */}
         <Card className="overflow-hidden">
           {loading && targets.length === 0 ? (
-            <div className="text-center py-12 text-theme-muted">
-              <RefreshCw className="w-8 h-8 mx-auto mb-4 animate-spin" />
-              <p>Loading targets...</p>
+            <div className="text-center py-8 md:py-12 text-theme-muted">
+              <RefreshCw className="w-6 h-6 md:w-8 md:h-8 mx-auto mb-3 md:mb-4 animate-spin" />
+              <p className="text-sm md:text-base">Loading targets...</p>
             </div>
           ) : targetsWithStatus.length === 0 ? (
-            <div className="text-center py-12 text-theme-muted">
-              <Target className="w-12 h-12 mx-auto mb-4 opacity-50" />
+            <div className="text-center py-8 md:py-12 text-theme-muted">
+              <Target className="w-10 h-10 md:w-12 md:h-12 mx-auto mb-3 md:mb-4 opacity-50" />
               {totalCount === 0 && !search && !tierFilter && !stateFilter ? (
                 <>
-                  <p>No targets configured</p>
-                  <p className="text-sm mt-1">Add targets to begin monitoring</p>
+                  <p className="text-sm md:text-base">No targets configured</p>
+                  <p className="text-xs md:text-sm mt-1">Add targets to begin monitoring</p>
                 </>
               ) : (
-                <p>No targets match your filters</p>
+                <p className="text-sm md:text-base">No targets match your filters</p>
               )}
             </div>
           ) : (
             <>
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Target</TableHead>
-                    <TableHead>Tier</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead className="text-right">Latency</TableHead>
-                    <TableHead className="text-right">Loss</TableHead>
-                    <TableHead>Agents</TableHead>
-                    <TableHead>Last Probe</TableHead>
-                    <TableHead></TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {targetsWithStatus.map((target) => {
-                    const hasExpectedOutcome = target.expected_outcome?.should_succeed === false;
-                    const status = target.status;
-                    const monitoringState = target.monitoring_state || 'unknown';
-                    return (
-                      <TableRow
-                        key={target.id}
-                        onClick={() => navigate(`/targets/${target.id}`)}
-                        className="cursor-pointer"
-                      >
-                        <TableCell>
-                          <div className="flex items-center gap-3">
-                            <StatusDot status={getStateColor(monitoringState)} pulse={monitoringState === 'down'} />
-                            <div>
-                              <span className="font-mono text-theme-primary">{target.ip}</span>
-                              {target.display_name && (
-                                <span className="ml-2 text-sm text-theme-muted">{target.display_name}</span>
-                              )}
-                            </div>
-                            {hasExpectedOutcome && (
-                              <span className="text-xs px-1.5 py-0.5 bg-surface-tertiary text-theme-muted rounded">Expected Fail</span>
+              {/* Mobile Card View */}
+              <MobileCardList>
+                {targetsWithStatus.map((target) => {
+                  const hasExpectedOutcome = target.expected_outcome?.should_succeed === false;
+                  const status = target.status;
+                  const monitoringState = target.monitoring_state || 'unknown';
+                  return (
+                    <MobileCard
+                      key={target.id}
+                      onClick={() => navigate(`/targets/${target.id}`)}
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <StatusDot status={getStateColor(monitoringState)} pulse={monitoringState === 'down'} />
+                          <div className="min-w-0">
+                            <span className="font-mono text-theme-primary text-sm truncate block">{target.ip}</span>
+                            {target.display_name && (
+                              <span className="text-xs text-theme-muted truncate block">{target.display_name}</span>
                             )}
                           </div>
-                        </TableCell>
-                        <TableCell>
-                          <span className={`px-2 py-0.5 rounded text-xs font-medium capitalize ${tierColors[target.tier] || 'bg-gray-500/20 text-theme-muted'}`}>
+                        </div>
+                        <div className="flex items-center gap-2 flex-shrink-0">
+                          <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium capitalize ${tierColors[target.tier] || 'bg-gray-500/20 text-theme-muted'}`}>
                             {target.tier}
                           </span>
-                        </TableCell>
-                        <TableCell>
-                          <StatusBadge status={getStateColor(monitoringState)} label={getStateLabel(monitoringState)} size="sm" />
-                        </TableCell>
-                        <TableCell className="text-right font-mono">
-                          {status?.avg_latency_ms != null ? `${status.avg_latency_ms.toFixed(1)}ms` : '—'}
-                        </TableCell>
-                        <TableCell className="text-right font-mono">
-                          <span className={status?.packet_loss_pct > 0 ? 'text-warning' : ''}>
-                            {status?.packet_loss_pct != null ? `${status.packet_loss_pct.toFixed(1)}%` : '—'}
-                          </span>
-                        </TableCell>
-                        <TableCell>
-                          {status?.total_agents > 0 ? (
-                            <span className={status.reachable_agents < status.total_agents ? 'text-warning' : ''}>
-                              {status.reachable_agents}/{status.total_agents}
-                            </span>
-                          ) : '—'}
-                        </TableCell>
-                        <TableCell className="text-theme-muted text-sm">
-                          {status?.last_probe ? formatRelativeTime(status.last_probe) : '—'}
-                        </TableCell>
-                        <TableCell>
                           <ChevronRight className="w-4 h-4 text-theme-muted" />
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })}
-                </TableBody>
-              </Table>
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-3 gap-2 pt-2 border-t border-border-subtle text-xs">
+                        <div>
+                          <span className="text-theme-muted">Latency</span>
+                          <div className="font-mono text-theme-primary">
+                            {status?.avg_latency_ms != null ? `${status.avg_latency_ms.toFixed(1)}ms` : '—'}
+                          </div>
+                        </div>
+                        <div>
+                          <span className="text-theme-muted">Loss</span>
+                          <div className={`font-mono ${status?.packet_loss_pct > 0 ? 'text-warning' : 'text-theme-primary'}`}>
+                            {status?.packet_loss_pct != null ? `${status.packet_loss_pct.toFixed(1)}%` : '—'}
+                          </div>
+                        </div>
+                        <div>
+                          <span className="text-theme-muted">Agents</span>
+                          <div className={status?.reachable_agents < status?.total_agents ? 'text-warning' : 'text-theme-primary'}>
+                            {status?.total_agents > 0 ? `${status.reachable_agents}/${status.total_agents}` : '—'}
+                          </div>
+                        </div>
+                      </div>
+                      {hasExpectedOutcome && (
+                        <span className="text-[10px] px-1.5 py-0.5 bg-surface-tertiary text-theme-muted rounded inline-block mt-1">Expected Fail</span>
+                      )}
+                    </MobileCard>
+                  );
+                })}
+              </MobileCardList>
+
+              {/* Desktop Table View */}
+              <div className="hidden md:block">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Target</TableHead>
+                      <TableHead>Tier</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead className="text-right">Latency</TableHead>
+                      <TableHead className="text-right">Loss</TableHead>
+                      <TableHead>Agents</TableHead>
+                      <TableHead>Last Probe</TableHead>
+                      <TableHead></TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {targetsWithStatus.map((target) => {
+                      const hasExpectedOutcome = target.expected_outcome?.should_succeed === false;
+                      const status = target.status;
+                      const monitoringState = target.monitoring_state || 'unknown';
+                      return (
+                        <TableRow
+                          key={target.id}
+                          onClick={() => navigate(`/targets/${target.id}`)}
+                          className="cursor-pointer"
+                        >
+                          <TableCell>
+                            <div className="flex items-center gap-3">
+                              <StatusDot status={getStateColor(monitoringState)} pulse={monitoringState === 'down'} />
+                              <div>
+                                <span className="font-mono text-theme-primary">{target.ip}</span>
+                                {target.display_name && (
+                                  <span className="ml-2 text-sm text-theme-muted">{target.display_name}</span>
+                                )}
+                              </div>
+                              {hasExpectedOutcome && (
+                                <span className="text-xs px-1.5 py-0.5 bg-surface-tertiary text-theme-muted rounded">Expected Fail</span>
+                              )}
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            <span className={`px-2 py-0.5 rounded text-xs font-medium capitalize ${tierColors[target.tier] || 'bg-gray-500/20 text-theme-muted'}`}>
+                              {target.tier}
+                            </span>
+                          </TableCell>
+                          <TableCell>
+                            <StatusBadge status={getStateColor(monitoringState)} label={getStateLabel(monitoringState)} size="sm" />
+                          </TableCell>
+                          <TableCell className="text-right font-mono">
+                            {status?.avg_latency_ms != null ? `${status.avg_latency_ms.toFixed(1)}ms` : '—'}
+                          </TableCell>
+                          <TableCell className="text-right font-mono">
+                            <span className={status?.packet_loss_pct > 0 ? 'text-warning' : ''}>
+                              {status?.packet_loss_pct != null ? `${status.packet_loss_pct.toFixed(1)}%` : '—'}
+                            </span>
+                          </TableCell>
+                          <TableCell>
+                            {status?.total_agents > 0 ? (
+                              <span className={status.reachable_agents < status.total_agents ? 'text-warning' : ''}>
+                                {status.reachable_agents}/{status.total_agents}
+                              </span>
+                            ) : '—'}
+                          </TableCell>
+                          <TableCell className="text-theme-muted text-sm">
+                            {status?.last_probe ? formatRelativeTime(status.last_probe) : '—'}
+                          </TableCell>
+                          <TableCell>
+                            <ChevronRight className="w-4 h-4 text-theme-muted" />
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              </div>
 
               {/* Pagination */}
               {totalPages > 1 && (

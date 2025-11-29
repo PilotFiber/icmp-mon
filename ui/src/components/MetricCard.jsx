@@ -40,7 +40,7 @@ export function MetricCard({
     <div
       className={`
         relative rounded-lg bg-surface-secondary border border-theme
-        ${isSmall ? 'p-3' : 'p-4'}
+        ${isSmall ? 'p-2.5 sm:p-3' : 'p-3 sm:p-4'}
         ${className}
       `}
     >
@@ -49,34 +49,34 @@ export function MetricCard({
         <div className={`absolute left-0 top-2 bottom-2 w-0.5 rounded-full ${accentLine[status]}`} />
       )}
 
-      <div className={`flex items-center justify-between ${status ? 'pl-3' : ''}`}>
-        <div className="min-w-0">
-          <p className="text-xs text-theme-muted mb-1">{title}</p>
+      <div className={`flex items-center justify-between ${status ? 'pl-2 sm:pl-3' : ''}`}>
+        <div className="min-w-0 flex-1">
+          <p className="text-[10px] sm:text-xs text-theme-muted mb-0.5 sm:mb-1 truncate">{title}</p>
           <div className="flex items-baseline gap-1">
-            <span className={`${isSmall ? 'text-lg' : 'text-xl'} font-semibold text-theme-secondary tabular-nums`}>
+            <span className={`${isSmall ? 'text-base sm:text-lg' : 'text-lg sm:text-xl'} font-semibold text-theme-secondary tabular-nums truncate`}>
               {value}
             </span>
             {unit && (
-              <span className="text-xs text-theme-muted">{unit}</span>
+              <span className="text-[10px] sm:text-xs text-theme-muted">{unit}</span>
             )}
           </div>
           {subtitle && (
-            <p className="text-xs text-theme-muted mt-0.5">{subtitle}</p>
+            <p className="text-[10px] sm:text-xs text-theme-muted mt-0.5 truncate">{subtitle}</p>
           )}
           {change !== null && (
             <div className={`flex items-center gap-1 mt-1 ${getTrendColor()}`}>
               {getTrendIcon()}
-              <span className="text-xs tabular-nums">
+              <span className="text-[10px] sm:text-xs tabular-nums">
                 {change > 0 ? '+' : ''}{change}%
               </span>
               {changeLabel && (
-                <span className="text-theme-muted text-xs">{changeLabel}</span>
+                <span className="text-theme-muted text-[10px] sm:text-xs hidden sm:inline">{changeLabel}</span>
               )}
             </div>
           )}
         </div>
         {Icon && (
-          <Icon className={`${isSmall ? 'w-4 h-4' : 'w-5 h-5'} text-theme-muted`} />
+          <Icon className={`${isSmall ? 'w-3.5 h-3.5 sm:w-4 sm:h-4' : 'w-4 h-4 sm:w-5 sm:h-5'} text-theme-muted flex-shrink-0 ml-2`} />
         )}
       </div>
     </div>

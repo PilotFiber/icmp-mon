@@ -5,6 +5,7 @@ import {
   Clock,
   RefreshCw,
   ChevronRight,
+  ChevronLeft,
   ChevronDown,
   CheckCircle,
   XCircle,
@@ -285,86 +286,93 @@ export function Incidents() {
         title="Incidents"
         description={`${stats.active + stats.acknowledged} open incidents`}
         actions={
-          <Button variant="secondary" onClick={fetchIncidents} className="gap-2">
+          <Button variant="secondary" onClick={fetchIncidents} className="gap-2" size="sm">
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-            Refresh
+            <span className="hidden sm:inline">Refresh</span>
           </Button>
         }
       />
 
       <PageContent>
         {/* Summary Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4 mb-4 md:mb-6">
           <MetricCard
             title="Active"
             value={stats.active}
             status={stats.active > 0 ? 'down' : 'healthy'}
             icon={AlertCircle}
+            size="sm"
           />
           <MetricCard
             title="Acknowledged"
             value={stats.acknowledged}
             status={stats.acknowledged > 0 ? 'degraded' : 'healthy'}
             icon={CheckCircle}
+            size="sm"
           />
           <MetricCard
-            title="Resolved (Today)"
+            title="Resolved"
             value={stats.resolved}
             status="healthy"
             icon={XCircle}
+            size="sm"
           />
           <MetricCard
             title="Critical"
             value={stats.critical}
             status={stats.critical > 0 ? 'down' : 'healthy'}
             icon={AlertTriangle}
+            size="sm"
           />
         </div>
 
         {/* Filters */}
-        <Card className="mb-6">
-          <div className="flex flex-wrap gap-4 items-center">
+        <Card className="mb-4 md:mb-6">
+          <div className="flex flex-col sm:flex-row sm:flex-wrap gap-2 sm:gap-3 md:gap-4 items-stretch sm:items-center">
             <SearchInput
               value={search}
               onChange={setSearch}
-              placeholder="Search by ID, type, or notes..."
-              className="w-72"
+              placeholder="Search..."
+              className="w-full sm:w-56 md:w-72"
             />
-            <Select
-              options={statusOptions}
-              value={statusFilter}
-              onChange={setStatusFilter}
-              className="w-40"
-            />
-            <Select
-              options={severityOptions}
-              value={severityFilter}
-              onChange={setSeverityFilter}
-              className="w-40"
-            />
-            <Select
-              options={typeOptions}
-              value={typeFilter}
-              onChange={setTypeFilter}
-              className="w-44"
-            />
+            <div className="grid grid-cols-3 sm:flex gap-2 sm:gap-3 md:gap-4">
+              <Select
+                options={statusOptions}
+                value={statusFilter}
+                onChange={setStatusFilter}
+                className="w-full sm:w-32 md:w-40"
+              />
+              <Select
+                options={severityOptions}
+                value={severityFilter}
+                onChange={setSeverityFilter}
+                className="w-full sm:w-32 md:w-40"
+              />
+              <Select
+                options={typeOptions}
+                value={typeFilter}
+                onChange={setTypeFilter}
+                className="w-full sm:w-32 md:w-44"
+              />
+            </div>
           </div>
         </Card>
 
         {/* Incidents List */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          <div className="lg:col-span-2">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 md:gap-6">
+          {/* On mobile, hide the list when an incident is selected, show detail instead */}
+          <div className={`lg:col-span-2 ${selectedIncident ? 'hidden lg:block' : ''}`}>
             <Card>
               {filteredIncidents.length === 0 ? (
-                <div className="text-center py-12 text-theme-muted">
-                  <AlertCircle className="w-12 h-12 mx-auto mb-4 opacity-50" />
+                <div className="text-center py-8 md:py-12 text-theme-muted">
+                  <AlertCircle className="w-10 h-10 md:w-12 md:h-12 mx-auto mb-3 md:mb-4 opacity-50" />
                   {incidents.length === 0 ? (
                     <>
-                      <p>No incidents recorded</p>
-                      <p className="text-sm mt-1">All systems operational</p>
+                      <p className="text-sm md:text-base">No incidents recorded</p>
+                      <p className="text-xs md:text-sm mt-1">All systems operational</p>
                     </>
                   ) : (
-                    <p>No incidents match your filters</p>
+                    <p className="text-sm md:text-base">No incidents match your filters</p>
                   )}
                 </div>
               ) : (
@@ -376,19 +384,19 @@ export function Incidents() {
                         setSelectedIncident(incident);
                         fetchIncidentDetails(incident.id);
                       }}
-                      className={`p-4 cursor-pointer transition-colors ${
+                      className={`p-3 md:p-4 cursor-pointer transition-colors ${
                         selectedIncident?.id === incident.id
                           ? 'bg-surface-tertiary'
-                          : 'hover:bg-surface-primary'
+                          : 'hover:bg-surface-primary active:bg-surface-tertiary'
                       }`}
                     >
-                      <div className="flex items-start gap-3">
-                        <div className={`p-2 rounded-lg ${severityBgColors[incident.severity] || 'bg-gray-500/20'}`}>
-                          <AlertCircle className={`w-5 h-5 ${severityColors[incident.severity] || 'text-theme-muted'}`} />
+                      <div className="flex items-start gap-2 md:gap-3">
+                        <div className={`p-1.5 md:p-2 rounded-lg flex-shrink-0 ${severityBgColors[incident.severity] || 'bg-gray-500/20'}`}>
+                          <AlertCircle className={`w-4 h-4 md:w-5 md:h-5 ${severityColors[incident.severity] || 'text-theme-muted'}`} />
                         </div>
                         <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 mb-1">
-                            <span className="font-medium text-theme-primary truncate">
+                          <div className="flex items-start md:items-center gap-2 mb-1 flex-wrap">
+                            <span className="font-medium text-theme-primary text-sm md:text-base truncate max-w-full">
                               {getIncidentTitle(incident)}
                             </span>
                             <StatusBadge
@@ -397,16 +405,18 @@ export function Incidents() {
                               size="sm"
                             />
                           </div>
-                          <div className="flex items-center gap-4 text-sm text-theme-muted">
+                          <div className="flex flex-wrap items-center gap-2 md:gap-4 text-xs md:text-sm text-theme-muted">
                             <span className="flex items-center gap-1">
                               <Target className="w-3 h-3" />
-                              {incident.affected_target_ids?.length || 0} targets
+                              {incident.affected_target_ids?.length || 0}
+                              <span className="hidden sm:inline">targets</span>
                             </span>
                             <span className="flex items-center gap-1">
                               <Server className="w-3 h-3" />
-                              {incident.affected_agent_ids?.length || 0} agents
+                              {incident.affected_agent_ids?.length || 0}
+                              <span className="hidden sm:inline">agents</span>
                             </span>
-                            <span className={`px-1.5 py-0.5 rounded text-xs ${
+                            <span className={`px-1.5 py-0.5 rounded text-[10px] md:text-xs ${
                               incident.severity === 'critical' ? 'bg-pilot-red/20 text-pilot-red' :
                               incident.severity === 'high' ? 'bg-warning/20 text-warning' :
                               incident.severity === 'medium' ? 'bg-pilot-yellow/20 text-pilot-yellow' :
@@ -415,20 +425,20 @@ export function Incidents() {
                               {incident.severity}
                             </span>
                           </div>
-                          <div className="flex items-center gap-4 mt-2 text-xs text-theme-muted">
+                          <div className="flex items-center gap-2 md:gap-4 mt-1.5 md:mt-2 text-[10px] md:text-xs text-theme-muted">
                             <span className="flex items-center gap-1">
                               <Clock className="w-3 h-3" />
-                              Detected {formatRelativeTime(incident.detected_at)}
+                              {formatRelativeTime(incident.detected_at)}
                             </span>
                             {incident.acknowledged_at && (
                               <span className="flex items-center gap-1">
                                 <CheckCircle className="w-3 h-3 text-pilot-cyan" />
-                                Ack'd by {incident.acknowledged_by}
+                                <span className="hidden sm:inline">Ack'd by</span> {incident.acknowledged_by}
                               </span>
                             )}
                           </div>
                         </div>
-                        <ChevronRight className="w-5 h-5 text-theme-muted flex-shrink-0" />
+                        <ChevronRight className="w-4 h-4 md:w-5 md:h-5 text-theme-muted flex-shrink-0" />
                       </div>
                     </div>
                   ))}
@@ -438,7 +448,7 @@ export function Incidents() {
           </div>
 
           {/* Incident Detail Panel */}
-          <div className="lg:col-span-1">
+          <div className={`lg:col-span-1 ${!selectedIncident ? 'hidden lg:block' : ''}`}>
             {selectedIncident ? (
               <Card
                 accent={
@@ -447,6 +457,14 @@ export function Incidents() {
                   'cyan'
                 }
               >
+                {/* Mobile back button */}
+                <button
+                  onClick={() => setSelectedIncident(null)}
+                  className="lg:hidden flex items-center gap-1 text-sm text-theme-muted hover:text-theme-primary mb-3"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                  Back to list
+                </button>
                 <div className="mb-4">
                   <div className="flex items-center gap-2 mb-2">
                     <span className={`px-2 py-0.5 rounded text-xs font-medium uppercase ${severityBgColors[selectedIncident.severity]} ${severityColors[selectedIncident.severity]}`}>
