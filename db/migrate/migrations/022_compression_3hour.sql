@@ -15,7 +15,3 @@ SELECT remove_compression_policy('agent_metrics', if_exists => true);
 -- Add new 3-hour compression policies
 SELECT add_compression_policy('probe_results', INTERVAL '3 hours');
 SELECT add_compression_policy('agent_metrics', INTERVAL '3 hours');
-
--- Record migration metadata
-COMMENT ON POLICY compress_chunks_probe_results_policy ON probe_results IS 'Compress probe data older than 3 hours';
-COMMENT ON POLICY compress_chunks_agent_metrics_policy ON agent_metrics IS 'Compress agent metrics older than 3 hours';
