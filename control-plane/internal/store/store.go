@@ -2413,13 +2413,44 @@ type PairKey struct {
 	TargetID string
 }
 
-// BulkGetRecentProbeStats retrieves probe stats for multiple agent-target pairs in a single query.
+// maxPairsPerBatch is the maximum number of agent-target pairs per query batch.
+// PostgreSQL has a limit of 65535 parameters. Each pair uses 2 parameters,
+// so we use 30000 pairs (60000 params) to stay well under the limit.
+const maxPairsPerBatch = 30000
+
+// BulkGetRecentProbeStats retrieves probe stats for multiple agent-target pairs.
+// Automatically batches queries to avoid PostgreSQL's 65535 parameter limit.
 // Returns a map keyed by (agent_id, target_id) pair.
 func (s *Store) BulkGetRecentProbeStats(ctx context.Context, pairs []AgentTargetPair, window time.Duration) (map[PairKey]*ProbeStats, error) {
 	if len(pairs) == 0 {
 		return make(map[PairKey]*ProbeStats), nil
 	}
 
+	result := make(map[PairKey]*ProbeStats)
+
+	// Process in batches to avoid parameter limit
+	for i := 0; i < len(pairs); i += maxPairsPerBatch {
+		end := i + maxPairsPerBatch
+		if end > len(pairs) {
+			end = len(pairs)
+		}
+		batch := pairs[i:end]
+
+		batchResult, err := s.bulkGetRecentProbeStatsBatch(ctx, batch, window)
+		if err != nil {
+			return nil, err
+		}
+
+		for k, v := range batchResult {
+			result[k] = v
+		}
+	}
+
+	return result, nil
+}
+
+// bulkGetRecentProbeStatsBatch retrieves probe stats for a single batch of pairs.
+func (s *Store) bulkGetRecentProbeStatsBatch(ctx context.Context, pairs []AgentTargetPair, window time.Duration) (map[PairKey]*ProbeStats, error) {
 	// Build VALUES clause for the pairs
 	values := make([]string, len(pairs))
 	args := make([]any, len(pairs)*2+1)
@@ -2517,12 +2548,38 @@ func (s *Store) BulkGetRecentProbeStats(ctx context.Context, pairs []AgentTarget
 	return result, rows.Err()
 }
 
-// BulkGetBaselines retrieves baselines for multiple agent-target pairs in a single query.
+// BulkGetBaselines retrieves baselines for multiple agent-target pairs.
+// Automatically batches queries to avoid PostgreSQL's 65535 parameter limit.
 func (s *Store) BulkGetBaselines(ctx context.Context, pairs []AgentTargetPair) (map[PairKey]*AgentTargetBaseline, error) {
 	if len(pairs) == 0 {
 		return make(map[PairKey]*AgentTargetBaseline), nil
 	}
 
+	result := make(map[PairKey]*AgentTargetBaseline)
+
+	// Process in batches to avoid parameter limit
+	for i := 0; i < len(pairs); i += maxPairsPerBatch {
+		end := i + maxPairsPerBatch
+		if end > len(pairs) {
+			end = len(pairs)
+		}
+		batch := pairs[i:end]
+
+		batchResult, err := s.bulkGetBaselinesBatch(ctx, batch)
+		if err != nil {
+			return nil, err
+		}
+
+		for k, v := range batchResult {
+			result[k] = v
+		}
+	}
+
+	return result, nil
+}
+
+// bulkGetBaselinesBatch retrieves baselines for a single batch of pairs.
+func (s *Store) bulkGetBaselinesBatch(ctx context.Context, pairs []AgentTargetPair) (map[PairKey]*AgentTargetBaseline, error) {
 	// Build VALUES clause for the pairs
 	values := make([]string, len(pairs))
 	args := make([]any, len(pairs)*2)
@@ -2560,12 +2617,38 @@ func (s *Store) BulkGetBaselines(ctx context.Context, pairs []AgentTargetPair) (
 	return result, rows.Err()
 }
 
-// BulkGetAgentTargetStates retrieves states for multiple agent-target pairs in a single query.
+// BulkGetAgentTargetStates retrieves states for multiple agent-target pairs.
+// Automatically batches queries to avoid PostgreSQL's 65535 parameter limit.
 func (s *Store) BulkGetAgentTargetStates(ctx context.Context, pairs []AgentTargetPair) (map[PairKey]*AgentTargetState, error) {
 	if len(pairs) == 0 {
 		return make(map[PairKey]*AgentTargetState), nil
 	}
 
+	result := make(map[PairKey]*AgentTargetState)
+
+	// Process in batches to avoid parameter limit
+	for i := 0; i < len(pairs); i += maxPairsPerBatch {
+		end := i + maxPairsPerBatch
+		if end > len(pairs) {
+			end = len(pairs)
+		}
+		batch := pairs[i:end]
+
+		batchResult, err := s.bulkGetAgentTargetStatesBatch(ctx, batch)
+		if err != nil {
+			return nil, err
+		}
+
+		for k, v := range batchResult {
+			result[k] = v
+		}
+	}
+
+	return result, nil
+}
+
+// bulkGetAgentTargetStatesBatch retrieves states for a single batch of pairs.
+func (s *Store) bulkGetAgentTargetStatesBatch(ctx context.Context, pairs []AgentTargetPair) (map[PairKey]*AgentTargetState, error) {
 	// Build VALUES clause for the pairs
 	values := make([]string, len(pairs))
 	args := make([]any, len(pairs)*2)
