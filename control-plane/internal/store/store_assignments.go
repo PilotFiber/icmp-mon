@@ -165,7 +165,7 @@ func (s *Store) GetActiveAssignmentsByTarget(ctx context.Context, targetID strin
 		FROM target_assignments ta
 		JOIN agents a ON ta.agent_id = a.id
 		WHERE ta.target_id = $1
-		  AND a.last_heartbeat > NOW() - INTERVAL '60 seconds'
+		  AND is_agent_online(a.last_heartbeat, a.archived_at)
 		ORDER BY ta.assigned_at
 	`, targetID)
 	if err != nil {
@@ -287,11 +287,7 @@ func (s *Store) ListAgentsWithStatus(ctx context.Context) ([]types.Agent, error)
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, name, region, location, provider, tags, public_ip::text,
 		       executors, max_targets, version,
-			CASE
-				WHEN last_heartbeat IS NULL OR last_heartbeat < NOW() - INTERVAL '60 seconds' THEN 'offline'
-				WHEN last_heartbeat < NOW() - INTERVAL '30 seconds' THEN 'degraded'
-				ELSE 'active'
-			END as status,
+			get_agent_status(last_heartbeat, NULL) as status,
 			last_heartbeat, created_at
 		FROM agents
 		ORDER BY name
@@ -309,17 +305,9 @@ func (s *Store) ListAgentsWithStatus(ctx context.Context) ([]types.Agent, error)
 func (s *Store) GetAgentsForStatusTransition(ctx context.Context) ([]AgentStatusTransition, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, name, status,
-			CASE
-				WHEN last_heartbeat IS NULL OR last_heartbeat < NOW() - INTERVAL '60 seconds' THEN 'offline'
-				WHEN last_heartbeat < NOW() - INTERVAL '30 seconds' THEN 'degraded'
-				ELSE 'active'
-			END as computed_status
+			get_agent_status(last_heartbeat, NULL) as computed_status
 		FROM agents
-		WHERE status != CASE
-			WHEN last_heartbeat IS NULL OR last_heartbeat < NOW() - INTERVAL '60 seconds' THEN 'offline'
-			WHEN last_heartbeat < NOW() - INTERVAL '30 seconds' THEN 'degraded'
-			ELSE 'active'
-		END
+		WHERE status != get_agent_status(last_heartbeat, NULL)
 	`)
 	if err != nil {
 		return nil, err

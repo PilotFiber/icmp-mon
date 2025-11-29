@@ -76,12 +76,7 @@ func (s *Store) GetAgent(ctx context.Context, id string) (*types.Agent, error) {
 	var tagsJSON []byte
 	err := s.pool.QueryRow(ctx, `
 		SELECT id, name, region, location, provider, tags, public_ip::text, executors, max_targets, version,
-			CASE
-				WHEN archived_at IS NOT NULL THEN 'offline'
-				WHEN last_heartbeat IS NULL OR last_heartbeat < NOW() - INTERVAL '60 seconds' THEN 'offline'
-				WHEN last_heartbeat < NOW() - INTERVAL '30 seconds' THEN 'degraded'
-				ELSE 'active'
-			END as status,
+			get_agent_status(last_heartbeat, archived_at) as status,
 			last_heartbeat, created_at, archived_at, archive_reason
 		FROM agents WHERE id = $1
 	`, id).Scan(
@@ -105,12 +100,7 @@ func (s *Store) GetAgentByName(ctx context.Context, name string) (*types.Agent, 
 	var tagsJSON []byte
 	err := s.pool.QueryRow(ctx, `
 		SELECT id, name, region, location, provider, tags, public_ip::text, executors, max_targets, version,
-			CASE
-				WHEN archived_at IS NOT NULL THEN 'offline'
-				WHEN last_heartbeat IS NULL OR last_heartbeat < NOW() - INTERVAL '60 seconds' THEN 'offline'
-				WHEN last_heartbeat < NOW() - INTERVAL '30 seconds' THEN 'degraded'
-				ELSE 'active'
-			END as status,
+			get_agent_status(last_heartbeat, archived_at) as status,
 			last_heartbeat, created_at, archived_at, archive_reason
 		FROM agents WHERE name = $1
 	`, name).Scan(
@@ -133,12 +123,7 @@ func (s *Store) GetAgentByName(ctx context.Context, name string) (*types.Agent, 
 func (s *Store) ListAgents(ctx context.Context) ([]types.Agent, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, name, region, location, provider, tags, public_ip::text, executors, max_targets, version,
-			CASE
-				WHEN archived_at IS NOT NULL THEN 'offline'
-				WHEN last_heartbeat IS NULL OR last_heartbeat < NOW() - INTERVAL '60 seconds' THEN 'offline'
-				WHEN last_heartbeat < NOW() - INTERVAL '30 seconds' THEN 'degraded'
-				ELSE 'active'
-			END as status,
+			get_agent_status(last_heartbeat, archived_at) as status,
 			last_heartbeat, created_at, archived_at, archive_reason
 		FROM agents ORDER BY archived_at NULLS FIRST, name
 	`)

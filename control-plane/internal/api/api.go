@@ -57,21 +57,11 @@ import (
 	"time"
 
 	"github.com/pilot-net/icmp-mon/control-plane/internal/cache"
+	"github.com/pilot-net/icmp-mon/control-plane/internal/config"
 	"github.com/pilot-net/icmp-mon/control-plane/internal/metrics"
 	"github.com/pilot-net/icmp-mon/control-plane/internal/service"
 	"github.com/pilot-net/icmp-mon/control-plane/internal/store"
 	"github.com/pilot-net/icmp-mon/pkg/types"
-)
-
-// Cache TTLs for various endpoints
-const (
-	cacheTTLFleetOverview     = 30 * time.Second
-	cacheTTLTargetStatuses    = 30 * time.Second
-	cacheTTLInfraHealth       = 60 * time.Second
-	cacheTTLLatencyMatrix     = 60 * time.Second
-	cacheTTLInMarketLatency   = 30 * time.Second
-	cacheTTLLatencyTrend      = 30 * time.Second
-	cacheTTLTargetList        = 60 * time.Second
 )
 
 // Server is the HTTP API server.
@@ -291,7 +281,7 @@ func (s *Server) handleInfrastructureHealth(w http.ResponseWriter, r *http.Reque
 
 	// Cache the result
 	if s.cache != nil {
-		if err := s.cache.SetJSON(r.Context(), cacheKey, health, cacheTTLInfraHealth); err != nil {
+		if err := s.cache.SetJSON(r.Context(), cacheKey, health, config.CacheTTLInfraHealth); err != nil {
 			s.logger.Warn("failed to cache infrastructure health", "error", err)
 		}
 	}
@@ -693,7 +683,7 @@ func (s *Server) handleFleetOverview(w http.ResponseWriter, r *http.Request) {
 
 	// Cache the result
 	if s.cache != nil {
-		if err := s.cache.SetJSON(r.Context(), cacheKey, overview, cacheTTLFleetOverview); err != nil {
+		if err := s.cache.SetJSON(r.Context(), cacheKey, overview, config.CacheTTLFleetOverview); err != nil {
 			s.logger.Warn("failed to cache fleet overview", "error", err)
 		}
 	}
@@ -785,7 +775,7 @@ func (s *Server) handleListTargets(w http.ResponseWriter, r *http.Request) {
 	// Cache the result
 	if s.cache != nil {
 		if data, err := json.Marshal(response); err == nil {
-			if err := s.cache.Set(r.Context(), cacheKey, data, cacheTTLTargetList); err != nil {
+			if err := s.cache.Set(r.Context(), cacheKey, data, config.CacheTTLTargetList); err != nil {
 				s.logger.Warn("failed to cache target list", "error", err)
 			}
 		}
@@ -1098,7 +1088,7 @@ func (s *Server) handleGetAllTargetStatuses(w http.ResponseWriter, r *http.Reque
 
 	// Cache the result
 	if s.cache != nil {
-		if err := s.cache.SetJSON(r.Context(), cacheKey, response, cacheTTLTargetStatuses); err != nil {
+		if err := s.cache.SetJSON(r.Context(), cacheKey, response, config.CacheTTLTargetStatuses); err != nil {
 			s.logger.Warn("failed to cache target statuses", "error", err)
 		}
 	}
@@ -1260,7 +1250,7 @@ func (s *Server) handleGetLatencyTrend(w http.ResponseWriter, r *http.Request) {
 	// Cache the result
 	if s.cache != nil {
 		if data, err := json.Marshal(response); err == nil {
-			if err := s.cache.Set(r.Context(), cacheKey, data, cacheTTLLatencyTrend); err != nil {
+			if err := s.cache.Set(r.Context(), cacheKey, data, config.CacheTTLLatencyTrend); err != nil {
 				s.logger.Warn("failed to cache latency trend", "error", err)
 			}
 		}
@@ -1307,7 +1297,7 @@ func (s *Server) handleGetInMarketLatencyTrend(w http.ResponseWriter, r *http.Re
 
 	// Cache the result
 	if s.cache != nil {
-		if err := s.cache.SetJSON(r.Context(), cacheKey, response, cacheTTLInMarketLatency); err != nil {
+		if err := s.cache.SetJSON(r.Context(), cacheKey, response, config.CacheTTLInMarketLatency); err != nil {
 			s.logger.Warn("failed to cache in-market latency", "error", err)
 		}
 	}
@@ -1347,7 +1337,7 @@ func (s *Server) handleGetLatencyMatrix(w http.ResponseWriter, r *http.Request) 
 
 	// Cache the result
 	if s.cache != nil {
-		if err := s.cache.SetJSON(r.Context(), cacheKey, matrix, cacheTTLLatencyMatrix); err != nil {
+		if err := s.cache.SetJSON(r.Context(), cacheKey, matrix, config.CacheTTLLatencyMatrix); err != nil {
 			s.logger.Warn("failed to cache latency matrix", "error", err)
 		}
 	}

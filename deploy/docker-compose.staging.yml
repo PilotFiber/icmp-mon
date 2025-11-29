@@ -22,7 +22,7 @@ services:
       - "127.0.0.1:5432:5432"  # Only localhost - not exposed externally
     volumes:
       - timescaledb_data:/var/lib/postgresql/data
-      - ../db/migrations:/docker-entrypoint-initdb.d:ro
+      - ../db/migrate/migrations:/docker-entrypoint-initdb.d:ro
       - ./backups:/backups:rw
     command:
       - "postgres"

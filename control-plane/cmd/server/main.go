@@ -33,6 +33,7 @@ import (
 	"github.com/pilot-net/icmp-mon/control-plane/internal/service"
 	"github.com/pilot-net/icmp-mon/control-plane/internal/store"
 	"github.com/pilot-net/icmp-mon/control-plane/internal/worker"
+	"github.com/pilot-net/icmp-mon/db/migrate"
 	"github.com/pilot-net/icmp-mon/pkg/types"
 )
 
@@ -84,6 +85,15 @@ func main() {
 		os.Exit(1)
 	}
 	logger.Info("connected to database")
+
+	// Run database migrations
+	// This ensures the schema is up-to-date before starting services
+	migCtx, migCancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer migCancel()
+	if err := migrate.Run(migCtx, db.Pool(), logger); err != nil {
+		logger.Error("database migration failed", "error", err)
+		os.Exit(1)
+	}
 
 	// Create service
 	svc := service.NewService(db, logger)

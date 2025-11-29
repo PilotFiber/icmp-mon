@@ -8,22 +8,22 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"time"
 
 	"github.com/redis/go-redis/v9"
 
+	"github.com/pilot-net/icmp-mon/control-plane/internal/config"
 	"github.com/pilot-net/icmp-mon/pkg/types"
 )
 
 const (
 	// Redis key for the probe results queue
 	keyProbeResults = "icmpmon:probe_results"
+)
 
-	// Default batch size for flushing - COPY handles large batches efficiently
-	DefaultBatchSize = 20000
-
-	// Default flush interval - flush more frequently to keep up with probe volume
-	DefaultFlushInterval = 2 * time.Second
+// Re-export config constants for backward compatibility
+const (
+	DefaultBatchSize     = config.BufferFlushBatchSize
+	DefaultFlushInterval = config.BufferFlushInterval
 )
 
 // ResultBuffer provides Redis-backed buffering for probe results.
@@ -42,7 +42,7 @@ func NewResultBuffer(redisURL string, logger *slog.Logger) (*ResultBuffer, error
 	client := redis.NewClient(opts)
 
 	// Test connection
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), config.RedisConnectionTimeout)
 	defer cancel()
 
 	if err := client.Ping(ctx).Err(); err != nil {
