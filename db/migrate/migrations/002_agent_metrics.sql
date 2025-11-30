@@ -258,16 +258,16 @@ BEGIN
         ORDER BY agent_id, time DESC
     )
     SELECT
-        asc.total::INTEGER,
-        asc.active::INTEGER,
-        asc.degraded::INTEGER,
-        asc.offline::INTEGER,
+        ac.total::INTEGER,
+        ac.active::INTEGER,
+        ac.degraded::INTEGER,
+        ac.offline::INTEGER,
         COALESCE(SUM(lm.active_targets), 0)::INTEGER,
         COALESCE(AVG(lm.probes_per_second), 0)::REAL,
         COALESCE(SUM(lm.results_queued), 0)::INTEGER
-    FROM agent_status_counts asc
+    FROM agent_status_counts ac
     LEFT JOIN latest_metrics lm ON true
-    GROUP BY asc.total, asc.active, asc.degraded, asc.offline;
+    GROUP BY ac.total, ac.active, ac.degraded, ac.offline;
 END;
 $$ LANGUAGE plpgsql;
 
