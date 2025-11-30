@@ -138,7 +138,7 @@ CREATE INDEX idx_state_history_time ON target_state_history(created_at DESC);
 -- =============================================================================
 
 CREATE TABLE activity_log (
-    id BIGSERIAL PRIMARY KEY,
+    id BIGSERIAL,
 
     -- What was affected (at least one should be set)
     target_id UUID REFERENCES targets(id) ON DELETE SET NULL,
@@ -168,7 +168,9 @@ CREATE TABLE activity_log (
     -- Severity for filtering
     severity TEXT NOT NULL DEFAULT 'info',  -- 'debug' | 'info' | 'warning' | 'error'
 
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    PRIMARY KEY (id, created_at)
 );
 
 -- Convert to hypertable for efficient time-series queries
