@@ -1,4 +1,4 @@
--- Migration: 019b_fix_representative_election_data.sql
+-- Migration: 024_representative_election_data.sql
 -- Purpose: Fix representative election logic from migration 018
 --
 -- Migration 018 incorrectly pre-assigned representatives based on IP position.

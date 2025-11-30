@@ -47,5 +47,5 @@ WHERE details->>'to_state' = 'degraded';
 
 INSERT INTO activity_log (category, event_type, details, triggered_by, severity)
 VALUES ('system', 'config_changed',
-    '{"migration": "008b_state_rename_data", "description": "Migrated degraded state to down. degraded now means packet loss/latency issues, down means complete outage."}',
+    '{"migration": "023_state_rename_data", "description": "Migrated degraded state to down. degraded now means packet loss/latency issues, down means complete outage."}',
     'system', 'info');
